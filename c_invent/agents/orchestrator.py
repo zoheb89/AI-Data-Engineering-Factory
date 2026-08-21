@@ -113,10 +113,41 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
         return self._run(pid,"assessment",prompts.ASSESSMENT,ctx,evidence_limit=8000,use_documents=True,max_tokens=1200)
 
     def run_blueprint(self,pid):
-        discovery=self.store.latest_run(pid,"discovery")
-        assessment=self.store.latest_run(pid,"assessment")
-        prior=json.dumps({"discovery": discovery["output"] if discovery else None, "assessment": assessment["output"] if assessment else None},ensure_ascii=False)[:14000]
-        return self._run(pid,"blueprint",prompts.BLUEPRINT,prior,evidence_limit=2000,use_documents=False,max_tokens=1200)
+        # Blueprint is deliberately a compact second-stage call. Discovery already
+        # distilled the customer evidence, so sending the full discovery/assessment
+        # payload again creates unnecessary latency and can trigger the Capgemini
+        # gateway 504 timeout.
+        discovery = self.store.latest_run(pid, "discovery")
+        assessment = self.store.latest_run(pid, "assessment")
+
+        def compact(obj, limit):
+            if not obj:
+                return None
+            return json.loads(json.dumps(obj.get("output"), ensure_ascii=False))
+
+        d = compact(discovery, 7000)
+        a = compact(assessment, 5000)
+        prior_obj = {"discovery": d, "assessment": a}
+        prior = json.dumps(prior_obj, ensure_ascii=False, separators=(",", ":"))[:7000]
+
+        instructions = prompts.BLUEPRINT + """
+Blueprint response must be concise and JSON-only. Use the Discovery/Assessment
+outputs as the authoritative current evidence. Do not restate the entire discovery.
+Return only: summary, target_architecture, data_flow, security_governance,
+environments, delivery_phases, risks, decisions, and open_questions.
+Keep arrays short and actionable. Do not invent technologies that are not supported
+by the evidence; mark proposed choices as recommendations/assumptions.
+"""
+
+        return self._run(
+            pid,
+            "blueprint",
+            instructions,
+            prior,
+            evidence_limit=0,
+            use_documents=False,
+            max_tokens=650,
+        )
 
     def run_metadata(self,pid):
         discovery=self.store.latest_run(pid,"discovery")
