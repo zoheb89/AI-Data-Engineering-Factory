@@ -10,8 +10,9 @@ llm:
   mode: chain
   auth_header: x-api-key
   auth_scheme: none
-  temperature: 0
-  max_tokens: 4096
+  temperature: 0.1
+  max_tokens: 1200
+  timeout_seconds: 90
 image:
   base_url: https://assets.generative.engine.capgemini.com/v1/generate
   model_name: gemini-2.5-flash-image

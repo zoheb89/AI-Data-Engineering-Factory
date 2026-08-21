@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 import json
 import uuid
+from typing import Any
+
 import requests
 
 
@@ -8,17 +12,21 @@ class CapgeminiLLMError(RuntimeError):
 
 
 class CapgeminiLLM:
-    """Adapter for Capgemini Generative Engine /v2/llm/invoke.
+    """Capgemini Generative Engine adapter.
 
-    Authentication is configurable because Capgemini environments can expose
-    the API key through a gateway-specific header. The POC defaults to
-    x-api-key (without Bearer) and supports api-key and Authorization too.
+    This implementation follows the request contract used by the supplied
+    Semantic Analytics Platform reference application:
+      - POST /v2/llm/invoke
+      - x-api-key authentication
+      - modelInterface at the top level
+      - all invocation parameters nested under `data`
+      - modelKwargs (not modelParams)
     """
 
     def __init__(self, settings):
         self.settings = settings
 
-    def _headers(self):
+    def _headers(self) -> dict[str, str]:
         key = (self.settings.llm_api_key or "").strip()
         if not key:
             raise CapgeminiLLMError(
@@ -26,13 +34,17 @@ class CapgeminiLLM:
                 ".streamlit/secrets.toml or Streamlit Cloud Secrets."
             )
 
+        # Capgemini reference implementation uses ApiKeyAuth:
+        # x-api-key: <key>. Keep configurable for tenant-specific gateways,
+        # but default to the proven contract.
         header = (self.settings.llm_auth_header or "x-api-key").strip()
         scheme = (self.settings.llm_auth_scheme or "none").strip().lower()
-
         if header.lower() == "authorization":
             value = f"Bearer {key}" if scheme == "bearer" else key
+        elif scheme not in ("", "none"):
+            value = f"{scheme.title()} {key}"
         else:
-            value = f"{scheme.title()} {key}" if scheme not in ("", "none") else key
+            value = key
 
         return {
             "Content-Type": "application/json",
@@ -40,106 +52,154 @@ class CapgeminiLLM:
             header: value,
         }
 
-    def _payload(self, text, system_prompt="", files=None, session_id=None, extra_params=None):
-        payload = {
-            "action": "run",
-            "modelInterface": self.settings.llm_interface,
-            "data": "",
-            "mode": self.settings.llm_mode,
-            "text": text,
-            "files": files or [],
-            "modelName": self.settings.llm_model,
-            "provider": self.settings.llm_provider,
-            "systemPrompt": system_prompt,
-            "sessionId": session_id or str(uuid.uuid4()),
-            "workspaceId": self.settings.capgemini_workspace_id,
-            "modelParams": {
-                "maxTokens": self.settings.max_tokens,
-                "temperature": self.settings.temperature,
-                "streaming": False,
-            },
+    def _payload(
+        self,
+        text: str,
+        system_prompt: str = "",
+        files: list[Any] | None = None,
+        session_id: str | None = None,
+        extra_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        session = session_id or str(uuid.uuid4())
+        model_kwargs: dict[str, Any] = {
+            "maxTokens": int(self.settings.max_tokens),
+            "temperature": float(self.settings.temperature),
+            "streaming": False,
+            "topP": 0.9,
         }
         if extra_params:
-            payload["modelParams"].update(extra_params)
-        return payload
+            model_kwargs.update(extra_params)
 
-    def invoke(self, text, system_prompt="", files=None, session_id=None, extra_params=None):
-        if not self.settings.llm_base_url:
+        data: dict[str, Any] = {
+            "mode": self.settings.llm_mode or "chain",
+            "text": text,
+            "files": files or [],
+            "modelName": self.settings.llm_model or "openai.gpt-5.1",
+            "provider": self.settings.llm_provider or "azure",
+            "systemPrompt": system_prompt,
+            "sessionId": session,
+            "modelKwargs": model_kwargs,
+        }
+
+        workspace_id = (self.settings.capgemini_workspace_id or "").strip()
+        if workspace_id:
+            data["workspaceId"] = workspace_id
+
+        # IMPORTANT: Capgemini expects invocation fields under `data`.
+        return {
+            "action": "run",
+            "modelInterface": self.settings.llm_interface or "langchain",
+            "data": data,
+        }
+
+    def invoke(
+        self,
+        text: str,
+        system_prompt: str = "",
+        files: list[Any] | None = None,
+        session_id: str | None = None,
+        extra_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not (self.settings.llm_base_url or "").strip():
             raise CapgeminiLLMError("Capgemini endpoint is not configured.")
 
         payload = self._payload(text, system_prompt, files, session_id, extra_params)
         headers = self._headers()
+        timeout = int(getattr(self.settings, "llm_timeout_seconds", 90) or 90)
 
         try:
-            r = requests.post(
-                self.settings.llm_base_url,
+            response = requests.post(
+                self.settings.llm_base_url.rstrip("/"),
                 headers=headers,
                 json=payload,
-                timeout=180,
+                timeout=timeout,
             )
-        except requests.RequestException as e:
-            raise CapgeminiLLMError(f"Capgemini connection error: {e}") from e
+        except requests.RequestException as exc:
+            raise CapgeminiLLMError(f"Capgemini connection failed: {exc}") from exc
 
-        if r.status_code >= 400:
-            hint = ""
-            if r.status_code == 401:
-                hint = (
-                    " Authentication failed. Verify CAPGEMINI_LLM_API_KEY and "
-                    f"CAPGEMINI_LLM_AUTH_HEADER={self.settings.llm_auth_header!r}. "
-                    f"Current auth scheme={self.settings.llm_auth_scheme!r}."
-                )
+        if response.status_code == 401:
             raise CapgeminiLLMError(
-                f"Capgemini HTTP {r.status_code}: {r.text[:2000]}{hint}"
+                "Capgemini authentication failed (HTTP 401). Verify "
+                "CAPGEMINI_LLM_API_KEY and the x-api-key header."
+            )
+
+        if response.status_code >= 400:
+            request_id = response.headers.get("x-amzn-requestid", "")
+            trace_id = response.headers.get("x-amzn-trace-id", "")
+            diagnostics = []
+            if request_id:
+                diagnostics.append(f"request_id={request_id}")
+            if trace_id:
+                diagnostics.append(f"trace_id={trace_id}")
+            suffix = f" ({', '.join(diagnostics)})" if diagnostics else ""
+            raise CapgeminiLLMError(
+                f"Capgemini HTTP {response.status_code}: "
+                f"{response.text[:4000]}{suffix}"
             )
 
         try:
-            obj = r.json()
-        except Exception:
-            return {"content": r.text, "raw": r.text}
+            obj = response.json()
+        except ValueError as exc:
+            raise CapgeminiLLMError(
+                f"Capgemini returned a non-JSON response: {response.text[:2000]}"
+            ) from exc
+
         return {"content": self._content(obj), "raw": obj}
 
     def test_connection(self):
-        """Small non-destructive connectivity/model test."""
         return self.invoke(
             "Reply with exactly: C INVENT TEST SUCCESS",
             "You are a connectivity test assistant. Follow the user's exact instruction.",
+            extra_params={"maxTokens": 100, "temperature": 0.0, "topP": 0.9, "streaming": False},
         )
 
     @staticmethod
-    def _content(obj):
+    def _content(obj: Any) -> str:
         if isinstance(obj, str):
             return obj
         if isinstance(obj, dict):
-            for key in ("content", "text", "output", "response", "answer"):
+            if isinstance(obj.get("content"), str):
+                return obj["content"]
+            data = obj.get("data")
+            if isinstance(data, dict) and isinstance(data.get("content"), str):
+                return data["content"]
+            choices = obj.get("choices")
+            if isinstance(choices, list) and choices:
+                first = choices[0]
+                if isinstance(first, dict):
+                    message = first.get("message")
+                    if isinstance(message, dict) and isinstance(message.get("content"), str):
+                        return message["content"]
+                    if isinstance(first.get("text"), str):
+                        return first["text"]
+            for key in ("text", "output", "response", "answer"):
                 if isinstance(obj.get(key), str):
                     return obj[key]
-            if isinstance(obj.get("data"), str):
-                return obj["data"]
-        return json.dumps(obj, indent=2)
+        return json.dumps(obj, indent=2, ensure_ascii=False)
 
-    def invoke_json(self, text, system_prompt="", **kwargs):
+    def invoke_json(self, text: str, system_prompt: str = "", **kwargs):
         result = self.invoke(text, system_prompt, **kwargs)
         content = result["content"].strip()
-        if content.startswith("```"):
-            parts = content.split("\n", 1)
-            content = parts[1] if len(parts) > 1 else content
-            if content.endswith("```"):
-                content = content[:-3]
+        cleaned = self._clean_json_fence(content)
         try:
-            return json.loads(content)
+            return json.loads(cleaned)
         except Exception:
             repair = self.invoke(
-                "Convert this answer to valid JSON only. No markdown. Preserve all information.\n\n"
+                "Convert the following answer to valid JSON only. No markdown. Preserve all information.\n\n"
                 + content,
                 "Return valid JSON only.",
                 **kwargs,
             )
+            repaired = self._clean_json_fence(repair["content"].strip())
             try:
-                repaired = repair["content"].strip()
-                if repaired.startswith("```"):
-                    repaired = repaired.split("\n", 1)[1]
-                    if repaired.endswith("```"):
-                        repaired = repaired[:-3]
                 return json.loads(repaired)
             except Exception:
                 return {"_raw": content, "_repair_raw": repair["content"]}
+
+    @staticmethod
+    def _clean_json_fence(content: str) -> str:
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1] if "\n" in content else content
+            if content.endswith("```"):
+                content = content[:-3]
+        return content.strip()

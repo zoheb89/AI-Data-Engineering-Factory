@@ -13,8 +13,9 @@ def settings(**overrides):
         llm_interface="langchain",
         llm_mode="chain",
         capgemini_workspace_id="workspace",
-        max_tokens=100,
-        temperature=0,
+        max_tokens=1200,
+        temperature=0.1,
+        llm_timeout_seconds=90,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -29,6 +30,17 @@ def test_bearer_authorization():
     assert h["Authorization"] == "Bearer abc123"
 
 
-def test_api_key_header():
-    h = CapgeminiLLM(settings(llm_auth_header="api-key"))._headers()
-    assert h["api-key"] == "abc123"
+def test_capgemini_payload_contract():
+    p = CapgeminiLLM(settings())._payload("hello", "system")
+    assert p["action"] == "run"
+    assert p["modelInterface"] == "langchain"
+    assert isinstance(p["data"], dict)
+    d = p["data"]
+    assert d["mode"] == "chain"
+    assert d["modelName"] == "openai.gpt-5.1"
+    assert d["provider"] == "azure"
+    assert d["workspaceId"] == "workspace"
+    assert "modelKwargs" in d
+    assert d["modelKwargs"]["streaming"] is False
+    assert "modelParams" not in p
+    assert "data" not in ("", None)

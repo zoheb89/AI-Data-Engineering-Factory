@@ -16,6 +16,7 @@ class Settings:
     llm_auth_scheme: str
     temperature: float
     max_tokens: int
+    llm_timeout_seconds: int
     db_host: str
     db_token: str
     db_warehouse_id: str
@@ -68,7 +69,8 @@ def load_settings():
             "CAPGEMINI_LLM_AUTH_SCHEME", llm.get("auth_scheme", "none")
         ),
         temperature=float(llm.get("temperature", 0)),
-        max_tokens=int(llm.get("max_tokens", 4096)),
+        max_tokens=int(llm.get("max_tokens", 1200)),
+        llm_timeout_seconds=int(_secret("LLM_TIMEOUT_SECONDS", "90")),
         db_host=_secret("DATABRICKS_HOST", ""),
         db_token=_secret("DATABRICKS_TOKEN", ""),
         db_warehouse_id=_secret("DATABRICKS_WAREHOUSE_ID", ""),
