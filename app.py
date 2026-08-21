@@ -120,8 +120,15 @@ def gate_message(text):
     st.warning(text)
 
 
-if "project_id" not in st.session_state:
-    st.session_state.project_id = store.create_project("Untitled Customer Project", "Unknown", "")
+# Do not create a project on every fresh Streamlit session. Reuse the latest
+# existing project and create a project only when the user explicitly asks.
+projects = store.list_projects()
+if "project_id" not in st.session_state or not store.get_project(st.session_state.project_id):
+    if projects:
+        st.session_state.project_id = projects[0]["id"]
+    else:
+        st.session_state.project_id = store.create_project("Untitled Customer Project", "Unknown", "")
+        projects = store.list_projects()
 
 project = store.get_project(st.session_state.project_id)
 
@@ -131,6 +138,17 @@ with st.sidebar:
     if st.button("＋ New Project", use_container_width=True):
         st.session_state.project_id = store.create_project("Untitled Customer Project", "Unknown", "")
         st.rerun()
+    if st.button("↻ Start Fresh", use_container_width=True):
+        st.session_state.confirm_reset = True
+    if st.session_state.get("confirm_reset"):
+        st.warning("This removes all local POC projects, documents, artifacts, runs, approvals and audit records.")
+        if st.checkbox("I understand and want to reset", key="confirm_reset_checkbox"):
+            if st.button("Reset Workspace", type="primary", use_container_width=True):
+                store.reset_workspace()
+                st.session_state.pop("confirm_reset", None)
+                st.session_state.pop("confirm_reset_checkbox", None)
+                st.session_state.project_id = store.create_project("Untitled Customer Project", "Unknown", "")
+                st.rerun()
     projects = store.list_projects()
     labels = {p["id"]: f'{p["name"]} · {p["id"][:8]}' for p in projects}
     selected = st.selectbox("Project", list(labels), format_func=lambda x: labels[x], index=list(labels).index(st.session_state.project_id))

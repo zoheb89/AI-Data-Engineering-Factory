@@ -74,7 +74,7 @@ The Capgemini POC now keeps agent requests compact, uses a 1,200-token default o
 
 ## Governed delivery lifecycle
 
-C INVENT 0.1.7 enforces the delivery sequence below. Intake does not perform platform capability checks.
+C INVENT 0.1.8 enforces the delivery sequence below. Intake does not perform platform capability checks.
 
 **Intake → Discovery → Environment Assessment → Assessment → Architecture → Metadata → Engineering → Validate → Deploy → Operate**
 

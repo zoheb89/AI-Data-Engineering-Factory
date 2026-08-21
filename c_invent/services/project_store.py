@@ -51,6 +51,16 @@ class ProjectStore:
         with self.conn() as c:
             return [dict(x) for x in c.execute("SELECT * FROM projects ORDER BY updated_at DESC")]
 
+    def reset_workspace(self):
+        """Clear all local POC data so a fresh delivery project can be started."""
+        with self.conn() as c:
+            c.execute("DELETE FROM audit")
+            c.execute("DELETE FROM approvals")
+            c.execute("DELETE FROM runs")
+            c.execute("DELETE FROM artifacts")
+            c.execute("DELETE FROM documents")
+            c.execute("DELETE FROM projects")
+
     def get_project(self, pid):
         with self.conn() as c:
             x = c.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
