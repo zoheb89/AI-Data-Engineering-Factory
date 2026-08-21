@@ -1,8 +1,0 @@
-source_system,schema,table,load_pattern,business_domain
-DataOcean,dbo,Patient,incremental,Patient
-DataOcean,dbo,Appointment,incremental,Appointments
-DataOcean,dbo,Encounter,incremental,Clinical
-DataOcean,dbo,Billing,batch,Billing
-DataOcean,dbo,Pharmacy,incremental,Pharmacy
-DataOcean,dbo,Laboratory,incremental,Laboratory
-DataOcean,dbo,Radiology,batch,Radiology
