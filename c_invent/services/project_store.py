@@ -183,7 +183,11 @@ class ProjectStore:
             return item
 
     def get_platform_config(self, pid):
-        return self.get_project(pid).get("platform_config") or {}
+        """Return project-owned platform configuration, never POC/global config."""
+        project = self.get_project(pid)
+        if not project:
+            return {}
+        return project.get("platform_config") or {}
 
     def save_platform_config(self, pid, config):
         config = config or {}

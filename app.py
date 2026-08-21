@@ -31,6 +31,32 @@ STAGES = [
 ]
 
 
+def get_platform_config_safe(pid):
+    """Compatibility-safe project platform configuration accessor.
+
+    Some Streamlit deployments can temporarily load app.py from a newer commit
+    while retaining an older ProjectStore module in the process cache. Keep the
+    UI alive in that situation and fall back to the persisted project JSON.
+    """
+    getter = getattr(store, "get_platform_config", None)
+    if callable(getter):
+        try:
+            return getter(pid) or {}
+        except (AttributeError, TypeError, KeyError):
+            pass
+    try:
+        project_row = store.get_project(pid)
+        if project_row:
+            value = project_row.get("platform_config")
+            if isinstance(value, dict):
+                return value
+            raw = project_row.get("platform_config_json") or "{}"
+            return json.loads(raw) if isinstance(raw, str) else {}
+    except Exception:
+        return {}
+    return {}
+
+
 def latest(pid, agent):
     return store.latest_run(pid, agent, success_only=True)
 
@@ -51,7 +77,7 @@ def state(pid):
     assessment = latest(pid, "assessment")
     architecture = latest(pid, "blueprint")
     architecture_approved = current_approval(pid, "blueprint", architecture)
-    platform_config = store.get_platform_config(pid)
+    platform_config = get_platform_config_safe(pid)
     platform_state = derive_state(platform_config)
     platform_ready = bool(architecture_approved and platform_state.get("state") in {"VERIFIED", "PLAN_READY"})
     metadata = latest(pid, "metadata")
@@ -628,7 +654,7 @@ elif page == "Solution Blueprint":
             st.json(run.get("output"))
             st.markdown("### Final target-platform decision")
             st.caption("Architecture recommends; the engagement team explicitly confirms the platform. C INVENT does not infer a provisioned customer environment from its own POC connection.")
-            existing_cfg = store.get_platform_config(project["id"])
+            existing_cfg = get_platform_config_safe(project["id"])
             rec = existing_cfg.get("platform") or ""
             options = [""] + SUPPORTED_PLATFORMS
             default_index = options.index(rec) if rec in options else 0
@@ -661,7 +687,7 @@ elif page == "Solution Blueprint":
 elif page == "Platform Workspace":
     st.subheader("Platform Workspace — Target Provisioning & Connection")
     st.caption("This is the customer-platform boundary. C INVENT is platform-neutral: the project chooses the target, then the engineer supplies environment details. C INVENT detects what it can, generates the next state, and never treats its own POC connection as customer evidence.")
-    cfg = dict(store.get_platform_config(project["id"]))
+    cfg = dict(get_platform_config_safe(project["id"]))
     current = derive_state(cfg)
     st.markdown("### 1. Target platform")
     options = [""] + SUPPORTED_PLATFORMS
@@ -692,7 +718,7 @@ elif page == "Platform Workspace":
         st.success("Platform configuration saved. C INVENT recalculated the onboarding state.")
         st.rerun()
 
-    cfg = store.get_platform_config(project["id"])
+    cfg = get_platform_config_safe(project["id"])
     current = derive_state(cfg)
     st.markdown("### 3. C INVENT platform state")
     st.info(f"**{current['state']} — {current['label']}**\n\nNext action: {current['next_action']}")
@@ -770,7 +796,7 @@ elif page == "Engineering Factory":
 
 elif page == "Platform Factory":
     st.subheader("Platform Factory — Target Platform Execution")
-    cfg = store.get_platform_config(project["id"])
+    cfg = get_platform_config_safe(project["id"])
     pst = derive_state(cfg)
     target = normalize_platform(cfg.get("platform")) if cfg.get("platform") else ""
     st.caption("Execution is generic at the C INVENT control level. A concrete platform adapter is invoked only for the selected customer target; the global POC connector is never used as customer evidence.")
