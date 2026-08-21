@@ -7,7 +7,18 @@ from c_invent.services.document_intel import extract_upload
 from c_invent.agents.orchestrator import Orchestrator
 from c_invent.databricks.client import DatabricksClient
 from c_invent.ui.styles import inject_css
-from c_invent.services.platforms import PLATFORM_CATALOG, SUPPORTED_PLATFORMS, derive_state, detect_platform, normalize_platform, secret_status, secret_value, environment_fields
+from c_invent.services import platforms as platform_service
+
+# Keep the UI import-safe if Streamlit briefly has a mixed/stale module cache.
+# The packaged c_invent.services.platforms module is the authoritative implementation.
+PLATFORM_CATALOG = platform_service.PLATFORM_CATALOG
+SUPPORTED_PLATFORMS = platform_service.SUPPORTED_PLATFORMS
+derive_state = platform_service.derive_state
+detect_platform = platform_service.detect_platform
+normalize_platform = platform_service.normalize_platform
+secret_status = platform_service.secret_status
+secret_value = platform_service.secret_value
+environment_fields = getattr(platform_service, "environment_fields", lambda mode: {})
 from c_invent.services.action_registry import next_action_spec, applicable_actions, action_context
 from c_invent.services.architecture_view import platform_fit, architecture_model, selected_platform_evaluation
 
