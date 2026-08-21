@@ -10,7 +10,7 @@ llm:
   mode: chain
   auth_header: x-api-key
   auth_scheme: none
-  temperature: 0.1
+  temperature: 0.0
   max_tokens: 1200
   timeout_seconds: 90
 image:

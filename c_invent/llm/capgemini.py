@@ -190,12 +190,13 @@ class CapgeminiLLM:
             msg = str(exc)
             if "HTTP 504" not in msg and "timed out" not in msg.lower():
                 raise
-            compact_text = text[:14000]
-            compact_system = system_prompt[:5000]
+            compact_text = text[:7000]
+            compact_system = system_prompt[:3000]
             compact_params = dict(kwargs.get("extra_params") or {})
-            compact_params["maxTokens"] = min(int(compact_params.get("maxTokens", 900)), 900)
+            compact_params["maxTokens"] = min(int(compact_params.get("maxTokens", 600)), 600)
             compact_params["temperature"] = 0.0
             compact_params["streaming"] = False
+            compact_params["topP"] = 0.9
             result = self.invoke(
                 compact_text,
                 compact_system,

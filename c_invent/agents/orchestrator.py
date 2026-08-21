@@ -53,7 +53,59 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
             return out
 
     def run_discovery(self,pid,prompt,context=""):
-        return self._run(pid,"discovery",prompts.DISCOVERY+"\nUser objective:\n"+prompt,context,evidence_limit=18000,use_documents=True,max_tokens=1200)
+        # Discovery is the first customer interaction. Keep the request intentionally
+        # small so the Capgemini gateway can answer reliably before we fan out into
+        # Assessment/Blueprint/Engineering. Larger evidence is consumed by later
+        # stages after Discovery has produced a structured intermediate result.
+        docs = self.store.documents(pid)
+        compact_system = (
+            "You are the C INVENT Discovery Agent. Analyze the business intent and "
+            "only the supplied evidence. Do not invent facts. Return JSON only. "
+            "Keep the response concise (normally under 500 tokens). Include: "
+            "summary, domain, objectives, processes, actors, systems, sources, "
+            "requirements, assumptions, unknowns, and next_steps."
+        )
+        evidence=[]
+        budget=6000
+        for d in docs:
+            if budget <= 0:
+                break
+            txt=(d.get("text") or "")[:min(2000,budget)]
+            if txt:
+                evidence.append(f"DOCUMENT {d['name']}:\n{txt}")
+                budget -= len(txt)
+        combined="\n\n".join(x for x in evidence if x)
+        if context:
+            combined += ("\n\n" if combined else "") + context[:3000]
+        user=(
+            "CUSTOMER INTENT:\n" + prompt[:4000] +
+            "\n\nSUPPLIED EVIDENCE:\n" + (combined or "No supporting documents supplied yet.") +
+            "\n\nReturn concise JSON with exactly these core fields: "
+            "summary, domain, objectives, processes, actors, systems, sources, "
+            "requirements, assumptions, unknowns, next_steps."
+        )
+        try:
+            out=self.llm.invoke_json(
+                user, compact_system,
+                extra_params={
+                    "maxTokens": 600,
+                    "temperature": 0.0,
+                    "streaming": False,
+                    "topP": 0.9,
+                },
+            )
+            # If the gateway still times out, invoke_json already performs one
+            # bounded retry. Persist only a successful structured discovery.
+            if isinstance(out,dict) and "error" in out and len(out)==1:
+                raise RuntimeError(out["error"])
+            self.store.save_run(pid,"discovery","success",compact_system,out)
+            self.store.add_audit(pid,"llm:discovery","success",json.dumps(out)[:4000])
+            return out
+        except Exception as e:
+            out={"error":str(e)}
+            self.store.save_run(pid,"discovery","failed",compact_system,out)
+            self.store.add_audit(pid,"llm:discovery","failed",str(e))
+            return out
 
     def run_assessment(self,pid):
         discovery=self.store.latest_run(pid,"discovery")
