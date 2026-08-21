@@ -14,6 +14,10 @@ class Store:
             return {"output":{"summary":"x","objectives":["a"]}}
         if agent=="assessment":
             return {"output":{"summary":"y","risks":["r"]}}
+        if agent=="metadata":
+            return {"output":{"summary":"m","entities":["patient"],"tables":["patient"],"data_quality":["not_null"]}}
+        if agent=="blueprint":
+            return {"output":{"summary":"b","target_architecture":{"platform":"Databricks"},"data_flow":["SQL Server -> Bronze -> Silver -> Gold"]}}
         return None
     def save_run(self,*args): self.runs.append(args)
     def add_audit(self,*args): pass
@@ -30,5 +34,15 @@ def test_blueprint_is_compact_and_low_token():
     assert out["summary"]=="ok"
     assert len(llm.text) < 9000
     assert llm.kw["maxTokens"] == 420
+    assert llm.kw["temperature"] == 0.0
+    assert llm.kw["streaming"] is False
+
+
+def test_engineering_is_compact_and_low_token():
+    store=Store(); o=Orchestrator(SimpleNamespace(),store); llm=LLM(); o.llm=llm
+    out=o.run_engineering("p1")
+    assert out["summary"] == "ok"
+    assert len(llm.text) < 9000
+    assert llm.kw["maxTokens"] == 500
     assert llm.kw["temperature"] == 0.0
     assert llm.kw["streaming"] is False

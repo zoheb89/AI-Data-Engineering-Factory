@@ -86,7 +86,10 @@ if page == "Command Center":
         if st.button("⚙️ Build Engineering Plan", use_container_width=True):
             with st.spinner("Generating metadata-driven engineering..."):
                 result = orch.run_engineering(project["id"])
-            st.success("Engineering plan generated.")
+            if isinstance(result, dict) and result.get("error"):
+                st.error("Engineering plan failed. Review the LLM error and retry.")
+            else:
+                st.success("Engineering plan generated successfully.")
             st.json(result)
     with c:
         if st.button("☁ Capability Check", use_container_width=True):

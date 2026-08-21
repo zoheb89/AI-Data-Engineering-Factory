@@ -217,13 +217,98 @@ Use the following structured evidence only:
     def run_full_qa(self,pid): return self._run(pid,"full_qa",prompts.FULL_QA,evidence_limit=6000,use_documents=False,max_tokens=1200)
 
     def run_engineering(self,pid):
-        out=self._run(pid,"engineering",prompts.ENGINEERING)
-        if isinstance(out,dict):
-            for item in out.get("code_artifacts",[]) if isinstance(out.get("code_artifacts",[]),list) else []:
-                if isinstance(item,dict) and item.get("content"):
-                    self.store.save_artifact(pid,item.get("layer","engineering"),
-                        item.get("name","generated.py"),item.get("language","python"),item["content"])
-        return out
+        """Generate a compact metadata-driven engineering plan.
+
+        Engineering is deliberately a dedicated, bounded LLM call. The generic
+        _run() path can include documents/project context and is too expensive
+        for the Capgemini gateway once Discovery + Blueprint exist. Engineering
+        should consume the approved structured artifacts only.
+        """
+        blueprint = self.store.latest_run(pid, "blueprint")
+        metadata = self.store.latest_run(pid, "metadata")
+        discovery = self.store.latest_run(pid, "discovery")
+        if not blueprint or not isinstance(blueprint.get("output"), dict):
+            return {"error": "Engineering requires a successful Blueprint result."}
+
+        def output(run):
+            return run.get("output") if isinstance(run, dict) else None
+
+        b = output(blueprint) or {}
+        m = output(metadata) or {}
+        d = output(discovery) or {}
+        evidence = {
+            "blueprint": {k: b.get(k) for k in (
+                "summary", "target_architecture", "data_flow",
+                "security_governance", "environments", "delivery_phases",
+                "decisions", "open_questions"
+            ) if k in b},
+            "metadata": {k: m.get(k) for k in (
+                "summary", "sources", "entities", "tables", "columns",
+                "relationships", "transformations", "data_quality", "lineage"
+            ) if k in m},
+            "discovery": {k: d.get(k) for k in (
+                "domain", "objectives", "systems", "sources", "requirements"
+            ) if k in d},
+        }
+        prior = json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))[:5200]
+
+        system = """You are the C INVENT Lead Data Engineer.
+Turn the approved Blueprint and available Metadata into a concise, domain-neutral
+engineering plan. Do not invent source tables or columns. Mark missing metadata
+as assumptions/open questions. Prefer reusable metadata-driven Bronze/Silver/Gold
+patterns, idempotent ingestion, data-quality gates, audit columns, error handling,
+incremental/CDC strategy, Lakeflow orchestration and testable artifacts.
+Return valid JSON only. Keep arrays short (maximum 4 items each).
+Required keys: summary, ingestion, bronze, silver, gold, data_quality, orchestration,
+parameters, testing, code_artifacts, assumptions, open_questions."""
+        user = "Create the engineering plan from these approved structured artifacts only:\n\n" + prior
+
+        try:
+            out = self.llm.invoke_json(
+                user, system,
+                extra_params={
+                    "maxTokens": 500, "temperature": 0.0,
+                    "streaming": False, "topP": 0.9,
+                },
+            )
+            if isinstance(out, dict) and out.get("error") and len(out) == 1:
+                raise RuntimeError(out["error"])
+            self.store.save_run(pid, "engineering", "success", system, out)
+            self.store.add_audit(pid, "llm:engineering", "success", json.dumps(out)[:4000])
+            if isinstance(out,dict):
+                for item in out.get("code_artifacts",[]) if isinstance(out.get("code_artifacts",[]),list) else []:
+                    if isinstance(item,dict) and item.get("content"):
+                        self.store.save_artifact(pid,item.get("layer","engineering"),
+                            item.get("name","generated.py"),item.get("language","python"),item["content"])
+            return out
+        except Exception as e:
+            # One deliberately smaller retry. Never resend customer documents.
+            try:
+                compact = json.dumps({
+                    "summary": b.get("summary"),
+                    "target_architecture": b.get("target_architecture"),
+                    "data_flow": b.get("data_flow"),
+                    "requirements": d.get("requirements", [])[:3],
+                    "metadata": {k:m.get(k) for k in ("sources","entities","tables","data_quality") if k in m},
+                }, ensure_ascii=False, separators=(",", ":"))[:2400]
+                out = self.llm.invoke_json(
+                    "Return a minimal engineering plan JSON for this evidence:\n" + compact,
+                    system,
+                    extra_params={
+                        "maxTokens": 300, "temperature": 0.0,
+                        "streaming": False, "topP": 0.9,
+                    },
+                )
+                if isinstance(out,dict) and not (out.get("error") and len(out)==1):
+                    self.store.save_run(pid, "engineering", "success", system, out)
+                    self.store.add_audit(pid, "llm:engineering", "success", json.dumps(out)[:4000])
+                    return out
+            except Exception as retry_error:
+                e = retry_error
+            out={"error":str(e)}
+            self.store.save_run(pid,"engineering","failed",system,out)
+            self.store.add_audit(pid,"llm:engineering","failed",str(e))
+            return out
 
     def run_lakeflow(self,pid):
         instructions=prompts.ENGINEERING+"""
