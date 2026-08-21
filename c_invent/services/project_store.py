@@ -92,6 +92,24 @@ class ProjectStore:
             c.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",
                       (str(uuid.uuid4()), pid, agent, status, input_text, json.dumps(output), self.now()))
 
+
+    def latest_run(self, pid, agent, success_only=True):
+        with self.conn() as c:
+            q = "SELECT * FROM runs WHERE project_id=? AND agent=?"
+            params = [pid, agent]
+            if success_only:
+                q += " AND status='success'"
+            q += " ORDER BY created_at DESC LIMIT 1"
+            row = c.execute(q, params).fetchone()
+            if not row:
+                return None
+            item = dict(row)
+            try:
+                item["output"] = json.loads(item["output_json"])
+            except Exception:
+                item["output"] = item["output_json"]
+            return item
+
     def add_approval(self, pid, artifact_type, comment):
         with self.conn() as c:
             c.execute("INSERT INTO approvals VALUES(?,?,?,?,?,?)",

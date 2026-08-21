@@ -178,23 +178,60 @@ class CapgeminiLLM:
         return json.dumps(obj, indent=2, ensure_ascii=False)
 
     def invoke_json(self, text: str, system_prompt: str = "", **kwargs):
-        result = self.invoke(text, system_prompt, **kwargs)
+        """Invoke JSON mode with a compact retry for gateway timeouts.
+
+        The Capgemini gateway can return HTTP 504 for oversized/slow requests.
+        C INVENT therefore retries once with a bounded context and lower output
+        budget instead of repeatedly sending the same expensive request.
+        """
+        try:
+            result = self.invoke(text, system_prompt, **kwargs)
+        except CapgeminiLLMError as exc:
+            msg = str(exc)
+            if "HTTP 504" not in msg and "timed out" not in msg.lower():
+                raise
+            compact_text = text[:14000]
+            compact_system = system_prompt[:5000]
+            compact_params = dict(kwargs.get("extra_params") or {})
+            compact_params["maxTokens"] = min(int(compact_params.get("maxTokens", 900)), 900)
+            compact_params["temperature"] = 0.0
+            compact_params["streaming"] = False
+            result = self.invoke(
+                compact_text,
+                compact_system,
+                session_id=kwargs.get("session_id"),
+                extra_params=compact_params,
+            )
+
         content = result["content"].strip()
         cleaned = self._clean_json_fence(content)
         try:
             return json.loads(cleaned)
         except Exception:
-            repair = self.invoke(
-                "Convert the following answer to valid JSON only. No markdown. Preserve all information.\n\n"
-                + content,
-                "Return valid JSON only.",
-                **kwargs,
+            # Repair only the returned answer, bounded to avoid another timeout.
+            repair_text = (
+                "Convert the following answer to valid JSON only. No markdown. "
+                "Preserve the available information and do not add facts.\n\n"
+                + content[:9000]
             )
-            repaired = self._clean_json_fence(repair["content"].strip())
+            repair_params = dict(kwargs.get("extra_params") or {})
+            repair_params["maxTokens"] = min(int(repair_params.get("maxTokens", 900)), 900)
+            repair_params["temperature"] = 0.0
+            repair_params["streaming"] = False
             try:
-                return json.loads(repaired)
-            except Exception:
-                return {"_raw": content, "_repair_raw": repair["content"]}
+                repair = self.invoke(
+                    repair_text,
+                    "Return valid JSON only.",
+                    session_id=kwargs.get("session_id"),
+                    extra_params=repair_params,
+                )
+                repaired = self._clean_json_fence(repair["content"].strip())
+                try:
+                    return json.loads(repaired)
+                except Exception:
+                    return {"_raw": content, "_repair_raw": repair["content"]}
+            except CapgeminiLLMError as exc:
+                return {"_raw": content, "_repair_error": str(exc)}
 
     @staticmethod
     def _clean_json_fence(content: str) -> str:

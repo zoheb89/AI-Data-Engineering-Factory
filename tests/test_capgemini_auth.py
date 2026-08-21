@@ -44,3 +44,10 @@ def test_capgemini_payload_contract():
     assert d["modelKwargs"]["streaming"] is False
     assert "modelParams" not in p
     assert "data" not in ("", None)
+
+
+def test_workspace_id_is_opt_in():
+    p = CapgeminiLLM(settings(capgemini_workspace_id="real-workspace" ))._payload("hello")
+    assert "workspaceId" not in p["data"]
+    p2 = CapgeminiLLM(settings(capgemini_workspace_id="real-workspace", include_workspace_id=True))._payload("hello")
+    assert p2["data"]["workspaceId"] == "real-workspace"

@@ -8,40 +8,74 @@ class Orchestrator:
         self.store=store
         self.llm=CapgeminiLLM(settings)
 
-    def _run(self,pid,agent,instructions,context=""):
-        p=self.store.get_project(pid)
-        docs=self.store.documents(pid)
-        evidence="\n\n".join(f"DOCUMENT {d['name']}:\n{d['text'][:14000]}" for d in docs)
-        user=f"""PROJECT:
-{json.dumps(p,indent=2)}
+    def _run(self, pid, agent, instructions, context="", evidence_limit=16000, use_documents=True, max_tokens=1200):
+        p = self.store.get_project(pid)
+        docs = self.store.documents(pid) if use_documents else []
+        evidence_parts = []
+        remaining = max(0, evidence_limit)
+        for d in docs:
+            if remaining <= 0:
+                break
+            chunk = (d.get("text") or "")[:min(6000, remaining)]
+            evidence_parts.append(f"DOCUMENT {d['name']}:\n{chunk}")
+            remaining -= len(chunk)
+        evidence = "\n\n".join(evidence_parts)
+        combined = "\n\n".join(x for x in (evidence, context) if x)
+        combined = combined[:evidence_limit + 12000]
+        user = f"""PROJECT:
+{json.dumps(p, indent=2)}
 
-EVIDENCE:
-{(evidence + "\n\n" + context)[:50000]}
+EVIDENCE / PRIOR OUTPUT:
+{combined}
 
 TASK:
 {instructions}
 
-Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-specific sections."""
+Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-specific sections. Return JSON only."""
         try:
-            out=self.llm.invoke_json(user,instructions)
-            self.store.save_run(pid,agent,"success",instructions,out)
-            self.store.add_audit(pid,f"llm:{agent}","success",json.dumps(out)[:4000])
+            out = self.llm.invoke_json(
+                user,
+                instructions,
+                extra_params={
+                    "maxTokens": max_tokens,
+                    "temperature": 0.0,
+                    "streaming": False,
+                    "topP": 0.9,
+                },
+            )
+            self.store.save_run(pid, agent, "success", instructions, out)
+            self.store.add_audit(pid, f"llm:{agent}", "success", json.dumps(out)[:4000])
             return out
         except Exception as e:
-            out={"error":str(e)}
-            self.store.save_run(pid,agent,"failed",instructions,out)
-            self.store.add_audit(pid,f"llm:{agent}","failed",str(e))
+            out = {"error": str(e)}
+            self.store.save_run(pid, agent, "failed", instructions, out)
+            self.store.add_audit(pid, f"llm:{agent}", "failed", str(e))
             return out
 
     def run_discovery(self,pid,prompt,context=""):
-        return self._run(pid,"discovery",prompts.DISCOVERY+"\nUser objective:\n"+prompt,context)
-    def run_assessment(self,pid): return self._run(pid,"assessment",prompts.ASSESSMENT)
-    def run_blueprint(self,pid): return self._run(pid,"blueprint",prompts.BLUEPRINT)
-    def run_metadata(self,pid): return self._run(pid,"metadata",prompts.METADATA)
-    def run_qa(self,pid): return self._run(pid,"qa",prompts.QA)
-    def run_application_architecture(self,pid): return self._run(pid,"application",prompts.APP)
-    def run_bi(self,pid): return self._run(pid,"bi",prompts.BI)
-    def run_full_qa(self,pid): return self._run(pid,"full_qa",prompts.FULL_QA)
+        return self._run(pid,"discovery",prompts.DISCOVERY+"\nUser objective:\n"+prompt,context,evidence_limit=18000,use_documents=True,max_tokens=1200)
+
+    def run_assessment(self,pid):
+        discovery=self.store.latest_run(pid,"discovery")
+        ctx=json.dumps(discovery["output"],ensure_ascii=False)[:10000] if discovery else ""
+        return self._run(pid,"assessment",prompts.ASSESSMENT,ctx,evidence_limit=8000,use_documents=True,max_tokens=1200)
+
+    def run_blueprint(self,pid):
+        discovery=self.store.latest_run(pid,"discovery")
+        assessment=self.store.latest_run(pid,"assessment")
+        prior=json.dumps({"discovery": discovery["output"] if discovery else None, "assessment": assessment["output"] if assessment else None},ensure_ascii=False)[:14000]
+        return self._run(pid,"blueprint",prompts.BLUEPRINT,prior,evidence_limit=2000,use_documents=False,max_tokens=1200)
+
+    def run_metadata(self,pid):
+        discovery=self.store.latest_run(pid,"discovery")
+        blueprint=self.store.latest_run(pid,"blueprint")
+        prior=json.dumps({"discovery": discovery["output"] if discovery else None, "blueprint": blueprint["output"] if blueprint else None},ensure_ascii=False)[:14000]
+        return self._run(pid,"metadata",prompts.METADATA,prior,evidence_limit=8000,use_documents=True,max_tokens=1200)
+
+    def run_qa(self,pid): return self._run(pid,"qa",prompts.QA,evidence_limit=8000,use_documents=False,max_tokens=1200)
+    def run_application_architecture(self,pid): return self._run(pid,"application",prompts.APP,evidence_limit=5000,use_documents=False,max_tokens=1200)
+    def run_bi(self,pid): return self._run(pid,"bi",prompts.BI,evidence_limit=5000,use_documents=False,max_tokens=1200)
+    def run_full_qa(self,pid): return self._run(pid,"full_qa",prompts.FULL_QA,evidence_limit=6000,use_documents=False,max_tokens=1200)
 
     def run_engineering(self,pid):
         out=self._run(pid,"engineering",prompts.ENGINEERING)

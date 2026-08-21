@@ -70,9 +70,16 @@ if page == "Command Center":
                 store.update_project(project["id"], description=prompt)
                 with st.spinner("GPT-5.1 is analyzing the engagement..."):
                     result = orch.run_discovery(project["id"], prompt)
-                    blueprint = orch.run_blueprint(project["id"])
-                st.success("Discovery and blueprint generated.")
-                st.json({"discovery": result, "blueprint": blueprint})
+                    if isinstance(result, dict) and result.get("error"):
+                        st.error("Discovery failed. Blueprint was not started.")
+                        st.json({"discovery": result})
+                    else:
+                        blueprint = orch.run_blueprint(project["id"])
+                        if isinstance(blueprint, dict) and blueprint.get("error"):
+                            st.warning("Discovery succeeded, but Blueprint failed.")
+                        else:
+                            st.success("Discovery and blueprint generated.")
+                        st.json({"discovery": result, "blueprint": blueprint})
             else:
                 st.warning("Enter a requirement.")
     with b:
@@ -128,7 +135,7 @@ elif page == "AI Discovery":
     prompt = st.text_area("Discovery objective", value=project.get("description") or "Analyze this customer engagement.", height=120)
     if st.button("Run Discovery Agent", type="primary"):
         docs = store.documents(project["id"])
-        context = "\\n\\n".join(f"### {d['name']}\\n{d['text'][:12000]}" for d in docs)
+        context = "\n\n".join(f"### {d['name']}\n{d['text'][:8000]}" for d in docs)
         with st.spinner("Analyzing evidence..."):
             st.json(orch.run_discovery(project["id"], prompt, context))
 
@@ -231,12 +238,19 @@ elif page == "AI Connectivity":
         st.metric("Authentication Header", settings.llm_auth_header)
     with c2:
         st.metric("API Key", "Configured" if settings.llm_api_key else "MISSING")
-        st.metric("Workspace ID", "Configured" if settings.capgemini_workspace_id else "MISSING")
+        workspace_status = "Configured & Used" if settings.include_workspace_id and settings.capgemini_workspace_id else "Not Used (recommended)"
+        st.metric("Workspace ID", workspace_status)
         st.metric("Auth Scheme", settings.llm_auth_scheme)
     st.code(settings.llm_base_url, language="text")
+    if not settings.include_workspace_id:
+        st.info("Workspace ID is intentionally not sent. The verified Capgemini invocation succeeds without it. Enable CAPGEMINI_INCLUDE_WORKSPACE_ID only when Capgemini provides a confirmed tenant-specific value.")
     if st.button("Test Capgemini Connection", type="primary"):
         with st.spinner("Testing Capgemini GPT-5.1..."):
             result = orch.llm_test("Reply with exactly: C INVENT TEST SUCCESS", "You are a connectivity test assistant.")
+            if isinstance(result, dict) and result.get("error"):
+                st.error("Capgemini connectivity test failed.")
+            else:
+                st.success("Capgemini GPT-5.1 connection successful.")
             st.json(result)
 
 elif page == "Audit":

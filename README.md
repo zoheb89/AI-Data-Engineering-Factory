@@ -42,7 +42,7 @@ The supplied Swagger screenshots establish:
 - `mode: chain`
 - non-streaming invocation
 
-The API adapter sends `streaming: false`. Authentication header format can vary by Capgemini tenant; this POC uses `Authorization: Bearer <key>` by default in one isolated method so it can be changed without touching the agents.
+The API adapter sends `streaming: false` and uses the verified `x-api-key` header. The working Capgemini invocation also confirms that `workspaceId` is optional for the base LLM endpoint, so C INVENT omits it by default. Enable `CAPGEMINI_INCLUDE_WORKSPACE_ID=true` only when a confirmed tenant-specific value is required.
 
 ## Databricks
 
@@ -66,3 +66,8 @@ Live resource creation paths use the current Databricks workspace APIs for Lakeb
 
 ### Capgemini workspaceId
 The working API test confirms that `workspaceId` is optional for the base LLM invocation. C INVENT defaults to omitting it. Do not use the Swagger example UUID. Enable `CAPGEMINI_INCLUDE_WORKSPACE_ID=true` only with a confirmed tenant-specific identifier.
+
+
+## Capgemini timeout handling
+
+The Capgemini POC now keeps agent requests compact, uses a 1,200-token default output budget, and performs one bounded retry when the gateway returns HTTP 504. Discovery receives bounded source evidence; Blueprint uses the saved Discovery/Assessment outputs instead of resending the full customer documents. This is designed to prevent gateway timeouts while preserving the evidence-driven workflow.
