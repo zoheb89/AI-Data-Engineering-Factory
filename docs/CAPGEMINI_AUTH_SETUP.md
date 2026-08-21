@@ -126,3 +126,7 @@ The endpoint should return HTTP 200 and a response body containing the generated
 ## 8. Streamlit Cloud
 
 Do not upload `secrets.toml` to GitHub. Paste the same TOML key/value pairs into Streamlit Cloud → App → Settings → Secrets.
+
+
+## Workspace ID behavior
+The `/v2/llm/invoke` connectivity test succeeds without `workspaceId`. C INVENT therefore does not send `workspaceId` by default. Set `CAPGEMINI_INCLUDE_WORKSPACE_ID=true` only when the Capgemini team confirms the ID is a valid Knowledge Base/workspace identifier for this endpoint.

@@ -62,3 +62,7 @@ The AI does not receive unrestricted Databricks credentials. It produces structu
 See `sample_customer/weqayah/`. All content is synthetic.
 
 Live resource creation paths use the current Databricks workspace APIs for Lakebase Autoscaling project creation and Databricks App creation/deployment. They remain protected by the mutation gate.
+
+
+### Capgemini workspaceId
+The working API test confirms that `workspaceId` is optional for the base LLM invocation. C INVENT defaults to omitting it. Do not use the Swagger example UUID. Enable `CAPGEMINI_INCLUDE_WORKSPACE_ID=true` only with a confirmed tenant-specific identifier.

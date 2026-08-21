@@ -10,6 +10,7 @@ class Settings:
     llm_provider: str
     llm_api_key: str
     capgemini_workspace_id: str
+    include_workspace_id: bool
     llm_interface: str
     llm_mode: str
     llm_auth_header: str
@@ -60,6 +61,7 @@ def load_settings():
         llm_provider=_secret("CAPGEMINI_LLM_PROVIDER", llm.get("provider", "azure")),
         llm_api_key=_secret("CAPGEMINI_LLM_API_KEY", ""),
         capgemini_workspace_id=_secret("CAPGEMINI_WORKSPACE_ID", ""),
+        include_workspace_id=_bool(_secret("CAPGEMINI_INCLUDE_WORKSPACE_ID", "false")),
         llm_interface=llm.get("model_interface", "langchain"),
         llm_mode=llm.get("mode", "chain"),
         llm_auth_header=_secret(

@@ -82,7 +82,7 @@ class CapgeminiLLM:
         }
 
         workspace_id = (self.settings.capgemini_workspace_id or "").strip()
-        if workspace_id:
+        if workspace_id and getattr(self.settings, "include_workspace_id", False):
             data["workspaceId"] = workspace_id
 
         # IMPORTANT: Capgemini expects invocation fields under `data`.

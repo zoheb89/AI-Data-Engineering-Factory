@@ -39,7 +39,7 @@ def test_capgemini_payload_contract():
     assert d["mode"] == "chain"
     assert d["modelName"] == "openai.gpt-5.1"
     assert d["provider"] == "azure"
-    assert d["workspaceId"] == "workspace"
+    assert "workspaceId" not in d
     assert "modelKwargs" in d
     assert d["modelKwargs"]["streaming"] is False
     assert "modelParams" not in p
