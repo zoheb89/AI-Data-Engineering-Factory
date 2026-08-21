@@ -1,5 +1,6 @@
-import json, re
+import json, re, os
 from c_invent.llm.capgemini import CapgeminiLLM
+from c_invent.services.platforms import normalize_platform, derive_state, secret_status, secret_value
 from c_invent.agents import prompts
 
 class Orchestrator:
@@ -85,47 +86,194 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
         self.store.add_audit(pid, "delivery:intake_pack", "success", json.dumps(pack)[:4000])
         return pack
 
-    def _target_platform(self, discovery_output):
-        text = json.dumps(discovery_output or {}, ensure_ascii=False).lower()
-        known = [
-            ("databricks", "Databricks"), ("snowflake", "Snowflake"),
-            ("microsoft fabric", "Microsoft Fabric"), ("fabric", "Microsoft Fabric"),
-            ("synapse", "Azure Synapse"), ("bigquery", "BigQuery"),
-            ("redshift", "Amazon Redshift"), ("aws", "AWS"),
-            ("azure", "Azure"), ("gcp", "Google Cloud"),
-        ]
-        for needle, label in known:
-            if needle in text:
-                return label
-        return "Unknown / to be confirmed"
+    def _target_platform_evidence(self, discovery_output):
+        """Return target direction separately from target selection/provisioning.
+
+        Discovery is allowed to capture a customer desired direction (for example,
+        Azure/Databricks) without treating it as a selected or provisioned platform.
+        Older discovery records that lack the explicit status are conservatively
+        treated as customer-stated direction.
+        """
+        d = discovery_output or {}
+        raw = json.dumps(d, ensure_ascii=False).lower()
+        direction = d.get("target_platform_direction") or d.get("target_platform")
+        if not direction:
+            known = [
+                ("databricks", "Databricks"), ("snowflake", "Snowflake"),
+                ("microsoft fabric", "Microsoft Fabric"), ("fabric", "Microsoft Fabric"),
+                ("synapse", "Azure Synapse"), ("bigquery", "BigQuery"),
+                ("redshift", "Amazon Redshift"),
+            ]
+            for needle, label in known:
+                if needle in raw:
+                    direction = label
+                    break
+        direction = direction or "Unknown / to be confirmed"
+        status = str(d.get("target_platform_status") or "").strip().lower()
+        allowed = {"unknown", "customer_stated_direction", "selected_not_provisioned", "selected_and_existing", "provisioned_verified"}
+        if status not in allowed:
+            status = "customer_stated_direction" if direction != "Unknown / to be confirmed" else "unknown"
+        evidence = d.get("target_platform_decision_evidence") or []
+        if not isinstance(evidence, list):
+            evidence = [str(evidence)]
+        return {
+            "target_platform": direction,
+            "target_platform_status": status,
+            "target_platform_decision_evidence": [str(x) for x in evidence if str(x).strip()],
+        }
 
     def run_environment_assessment(self, pid, capability_report=None):
+        """Assess the customer environment only from project-owned platform state.
+
+        The global C INVENT Databricks adapter is deliberately ignored here. This
+        prevents a POC workspace from being mistaken for a customer's provisioned
+        target. Customer verification is performed only after Platform Workspace
+        records a selected target and the appropriate connection/provisioning state.
+        """
         discovery = self._success(pid, "discovery")
         if not discovery:
             return {"error": "Environment Assessment requires a successful Discovery result."}
         d = discovery.get("output") if isinstance(discovery.get("output"), dict) else {}
-        target = self._target_platform(d)
-        capability = {"applicable": False, "reason": "No target platform requiring a live platform capability check was established during Discovery."}
-        if target == "Databricks":
-            capability = capability_report or {"configured": False, "message": "Databricks capability check was not executed."}
-            capability = {"applicable": True, **capability}
-        elif capability_report is not None and target != "Unknown / to be confirmed":
-            capability = {"applicable": False, "reason": f"No adapter is configured in this POC for target platform '{target}'.", "platform": target}
+        project = self.store.get_project(pid)
+        pcfg = project.get("platform_config") or {}
+        target = normalize_platform(pcfg.get("platform")) if pcfg.get("platform") else ""
+        discovery_info = self._target_platform_evidence(d)
+        if not target:
+            target = discovery_info["target_platform"] if discovery_info["target_platform"] != "Unknown / to be confirmed" else "Unknown / to be confirmed"
+        decision_status = pcfg.get("decision_status", "not_selected")
+        state = derive_state(pcfg)
+
+        target_status = {
+            "not_selected": "customer_stated_direction",
+            "selected": "selected_not_provisioned",
+        }.get(decision_status, discovery_info.get("target_platform_status", "unknown"))
+        if state["state"] == "VERIFIED":
+            target_status = "provisioned_verified"
+
+        capability = {
+            "applicable": False,
+            "scope": "customer_environment",
+            "state": state["state"],
+            "reason": state["next_action"],
+            "customer_platform_configured": bool(pcfg.get("platform")),
+            "customer_endpoint_present": bool(pcfg.get("endpoint")),
+            "credential_status": secret_status(pcfg),
+            "cinvent_control_plane_adapter": "excluded_from_customer_evidence",
+        }
+
+        # Actual customer capability verification currently has a concrete adapter
+        # for Databricks. Other platforms still receive a truthful generic state
+        # and provisioning plan, rather than fabricated capability evidence.
+        if target == "Databricks" and state["state"] == "READY_TO_VERIFY":
+            try:
+                from c_invent.databricks.client import DatabricksClient
+                ref = [x.strip() for x in str(pcfg.get("credential_ref") or "").split(",") if x.strip()]
+                token = secret_value(ref[-1]) if ref else ""
+                customer_db = DatabricksClient(self.settings, host=pcfg.get("endpoint"), token=token)
+                raw = customer_db.capability_report()
+                capability = {"applicable": True, "scope": "customer_environment", **raw}
+                if raw.get("configured") and not raw.get("error"):
+                    pcfg["verified_at"] = self.store.now()
+                    pcfg["verification_snapshot"] = raw
+                    self.store.save_platform_config(pid, pcfg)
+                    state = derive_state(pcfg)
+                    target_status = "provisioned_verified"
+                    capability["verification"] = "verified_customer_environment"
+            except Exception as exc:
+                capability = {"applicable": True, "scope": "customer_environment", "verification": "failed", "error": str(exc)}
+
+        provisioning_path = (
+            "Select a final target platform in Solution Blueprint/Platform Workspace before provisioning." if not pcfg.get("platform") else
+            "Connect and verify an existing customer environment using customer-owned credentials." if pcfg.get("environment_mode") == "existing" else
+            "Generate, review and approve the platform-specific cloud/IaC provisioning plan; execute with authorized customer/cloud credentials, then verify." if pcfg.get("environment_mode") == "provision" else
+            state["next_action"]
+        )
         context = json.dumps({
             "discovery": {k: d.get(k) for k in ("summary", "domain", "systems", "sources", "requirements", "unknowns") if k in d},
-            "target_platform": target,
-            "platform_capability_evidence": capability,
+            "customer_platform": {"platform": target, "decision_status": decision_status, "onboarding_state": state, "config": {k:v for k,v in pcfg.items() if k not in ("verification_snapshot",)}},
+            "customer_environment_capability_evidence": capability,
+            "provisioning_path": provisioning_path,
         }, ensure_ascii=False, separators=(",", ":"))[:7000]
         result = self._run(pid, "environment_assessment", prompts.ENVIRONMENT_ASSESSMENT, context, evidence_limit=5000, use_documents=False, max_tokens=900)
+        if isinstance(result, dict) and result.get("error"):
+            # Environment Assessment is a lifecycle evidence gate, not an LLM gate.
+            # If the AI provider times out, persist a deterministic snapshot so the
+            # user still sees the platform state and can continue with human action.
+            result = {
+                "summary": "Environment Assessment created from customer platform configuration and deterministic evidence. AI enrichment was unavailable for this run.",
+                "facts": [f"Target platform: {target or 'not selected'}", f"Onboarding state: {state['state']}"],
+                "assumptions": [],
+                "target_platform": target or "Unknown / to be confirmed",
+                "target_platform_status": target_status,
+                "target_platform_decision_evidence": discovery_info["target_platform_decision_evidence"],
+                "customer_environment_status": state["state"].lower(),
+                "current_environment": d.get("systems", []),
+                "access": {"customer_environment": "verified" if state["state"] == "VERIFIED" else "not_verified"},
+                "capabilities": capability,
+                "platform_capability_evidence": capability,
+                "provisioning_path": provisioning_path,
+                "platform_onboarding_state": state,
+                "constraints": ["AI enrichment unavailable; deterministic evidence retained."],
+                "gaps": [state["next_action"]] if state["state"] not in {"VERIFIED", "PLAN_READY"} else [],
+                "unknowns": d.get("unknowns", [])[:10],
+                "ai_enrichment": "not_available_for_this_run",
+            }
+            self.store.save_run(pid, "environment_assessment", "success", context, result)
+            self.store.add_audit(pid, "environment:deterministic_fallback", "success", json.dumps(result)[:4000])
+            self.store.save_artifact(pid, "environment_assessment", "environment_assessment.json", "json", json.dumps(result, indent=2, ensure_ascii=False))
+            return result
         if isinstance(result, dict) and not result.get("error"):
             result["target_platform"] = target
+            result["target_platform_status"] = target_status
+            result["target_platform_decision_evidence"] = discovery_info["target_platform_decision_evidence"] + ([f"Platform Workspace selected {target} for this engagement."] if pcfg.get("platform") else [])
+            result["customer_environment_status"] = "verified_customer_environment" if state["state"] == "VERIFIED" else state["state"].lower()
             result["platform_capability_evidence"] = capability
-            # Persist the enriched result as the authoritative environment evidence.
+            result["provisioning_path"] = provisioning_path
+            result["platform_onboarding_state"] = state
             self.store.save_run(pid, "environment_assessment", "success", context, result)
-            self.store.add_audit(pid, "environment:capability_snapshot", "success", json.dumps(capability)[:4000])
+            self.store.add_audit(pid, "environment:customer_capability_snapshot", "success", json.dumps(capability)[:4000])
             self.store.save_artifact(pid, "environment_assessment", "environment_assessment.json", "json", json.dumps(result, indent=2, ensure_ascii=False))
         return result
 
+    def generate_platform_plan(self, pid):
+        """Create a reviewable, platform-neutral provisioning/connection plan."""
+        project = self.store.get_project(pid)
+        cfg = project.get("platform_config") or {}
+        state = derive_state(cfg)
+        if not cfg.get("platform") or cfg.get("decision_status") != "selected":
+            return {"error": "Select and confirm the final target platform before generating a platform plan."}
+        platform = normalize_platform(cfg.get("platform"))
+        cloud = cfg.get("cloud") or "To be selected"
+        mode = cfg.get("environment_mode") or "To be selected"
+        plan = {
+            "platform": platform,
+            "cloud": cloud,
+            "environment_mode": mode,
+            "onboarding_state": state,
+            "facts": [
+                f"Customer target platform selected: {platform}.",
+                f"Deployment path selected: {mode}.",
+            ],
+            "human_inputs_required": [
+                "Customer/cloud subscription or account ownership and region.",
+                "Network/connectivity decision for source systems.",
+                "Identity/authentication and secret-manager configuration.",
+                "Security, governance, backup and recovery requirements.",
+            ],
+            "execution": [
+                "Generate platform-specific configuration/IaC from approved architecture.",
+                "Review and approve the plan.",
+                "Execute with authorized customer/cloud credentials.",
+                "Verify platform capabilities and refresh Environment Assessment.",
+            ],
+            "guardrail": "C INVENT does not claim a platform is provisioned because its own POC connector exists.",
+            "timestamp": self.store.now(),
+        }
+        cfg["provisioning_plan"] = plan
+        self.store.save_platform_config(pid, cfg)
+        self.store.save_artifact(pid, "platform_plan", f"{platform.lower().replace(' ','_')}_platform_plan.json", "json", json.dumps(plan, indent=2))
+        self.store.add_audit(pid, "platform:plan_generated", "success", json.dumps(plan)[:5000])
+        return plan
     def run_discovery(self,pid,prompt,context=""):
         if not getattr(self.store, "artifact_exists", lambda *_: False)(pid, "intake_pack"):
             return {"error": "Discovery requires a completed Intake Pack."}
@@ -157,7 +305,7 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
             "\n\nSUPPLIED EVIDENCE:\n" + (combined or "No supporting documents supplied yet.") +
             "\n\nReturn concise JSON with exactly these core fields: "
             "summary, domain, objectives, processes, actors, systems, sources, "
-            "requirements, assumptions, unknowns, next_steps."
+            "requirements, assumptions, unknowns, next_steps, target_platform_direction, target_platform_status, target_platform_decision_evidence."
         )
         try:
             out=self.llm.invoke_json(
@@ -226,6 +374,7 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
         assumptions = items("assumptions")
         unknowns = unique(items("unknowns"))
         target = e.get("target_platform") or "Unknown / to be confirmed"
+        target_status = e.get("target_platform_status") or "unknown"
         current_env = e.get("current_environment") or systems
         access = e.get("access") or {}
         capabilities = e.get("capabilities") or e.get("platform_capability_evidence") or {}
@@ -266,18 +415,39 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
             for key, value in capabilities.items():
                 if isinstance(value, dict) and value.get("error"):
                     capability_errors.append(f"{key}: {value.get('error')}")
-        platform_findings = unique([
-            f"Target platform established as {target}." if target != "Unknown / to be confirmed" else "Target platform is not yet established.",
-            "C INVENT Databricks connection is configured." if capability_configured else "C INVENT does not have verified Databricks connectivity in this assessment.",
-            *[str(x) for x in env_gaps[:5]],
-            *capability_errors[:5],
-        ])
-        if target == "Databricks" and capability_configured and not capability_errors:
-            platform_status = "VERIFIED / CONDITIONAL ON REQUIRED PERMISSIONS"
-        elif target == "Unknown / to be confirmed":
-            platform_status = "NOT YET ASSESSABLE"
+        poc_adapter = isinstance(capabilities, dict) and bool(capabilities.get("cinvent_poc_adapter_configured"))
+        if target_status == "customer_stated_direction":
+            platform_findings = unique([
+                f"Customer-stated target direction: {target}.",
+                "Target is not yet a governed selection/provisioned customer environment.",
+                "C INVENT POC/control-plane connectivity is separate and is not customer-environment evidence." if poc_adapter else "No customer-environment platform capability evidence is available yet.",
+                "Provisioning/connection path must be resolved after architecture and approval.",
+                *[str(x) for x in env_gaps[:5]],
+                *capability_errors[:5],
+            ])
+            platform_status = "TARGET DIRECTION ONLY — NOT PROVISIONED / VERIFIED"
+        elif target_status == "selected_not_provisioned":
+            platform_findings = unique([
+                f"Target platform selected: {target}.",
+                "Customer target environment is not yet provisioned or verified.",
+                "Platform Workspace must connect or provision the approved target before capability evidence can be claimed.",
+                *[str(x) for x in env_gaps[:5]],
+                *capability_errors[:5],
+            ])
+            platform_status = "SELECTED — PROVISIONING / CONNECTION REQUIRED"
         else:
-            platform_status = "CONDITIONAL"
+            platform_findings = unique([
+                f"Target platform: {target}." if target != "Unknown / to be confirmed" else "Target platform is not yet established.",
+                "Customer-environment capability evidence verified through the configured adapter." if capability_configured else "C INVENT does not have verified customer-environment connectivity in this assessment.",
+                *[str(x) for x in env_gaps[:5]],
+                *capability_errors[:5],
+            ])
+            if target == "Databricks" and capability_configured and not capability_errors:
+                platform_status = "VERIFIED / CONDITIONAL ON REQUIRED PERMISSIONS"
+            elif target == "Unknown / to be confirmed":
+                platform_status = "NOT YET ASSESSABLE"
+            else:
+                platform_status = "CONDITIONAL"
 
         governance_keywords = ("security", "privacy", "phi", "pii", "compliance", "regulat", "rbac", "access", "retention", "rpo", "rto", "sla")
         governance_unknowns = [u for u in unknowns + env_unknowns if any(k in u.lower() for k in governance_keywords)]
@@ -318,8 +488,10 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
                     "what_is_assessed": "Discovered target/current platform plus verified access and capability evidence; this does not infer missing capabilities.",
                     "current_environment": current_env,
                     "target_platform": target,
+                    "target_platform_status": target_status,
                     "access": access,
                     "capabilities": capabilities,
+                    "provisioning_path": e.get("provisioning_path"),
                     "evidence": platform_findings,
                     "source": ["Discovery Run", "Environment Assessment"],
                 },
@@ -336,7 +508,9 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
             "unknowns": unique(unknowns + env_unknowns)[:15],
             "recommended_next_actions": [
                 "Resolve the listed evidence gaps before final architecture decisions." if blockers else "Proceed to architecture with the recorded evidence.",
-                "Keep platform capability evidence separate from customer-stated requirements.",
+                "Convert any customer-stated target direction into an explicit architecture decision before provisioning.",
+                "Use Platform Workspace to connect an existing customer environment or execute an approved cloud/IaC provisioning plan after architecture approval.",
+                "Keep C INVENT POC/control-plane connectivity separate from customer-environment evidence.",
                 "Require human approval before downstream metadata and engineering generation.",
             ],
             "traceability": {

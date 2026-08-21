@@ -28,3 +28,21 @@ The Assessment gate is **deterministic and evidence-first**. Capgemini AI can en
 - `GO TO ARCHITECTURE` — sufficient evidence for the next stage.
 - `CONDITIONAL GO` — architecture can proceed only with recorded gaps/conditions.
 - `NO-GO / MORE DISCOVERY REQUIRED` — critical evidence is missing.
+
+
+## Target platform and provisioning boundary
+
+C INVENT must distinguish four states: **customer-stated direction**, **selected but not provisioned**, **selected and existing**, and **provisioned and verified**. A statement such as “Azure/Databricks target” in Discovery is a customer target direction, not proof that a Databricks workspace exists.
+
+The POC Databricks connector is control-plane/test infrastructure. Its connectivity must never be reported as customer-environment evidence unless the project explicitly records that the connected workspace is the customer's selected existing/provisioned environment.
+
+Provisioning occurs after the target decision and architecture approval through the Platform Workspace. The execution path is either (1) connect and verify a customer-provisioned environment, or (2) execute an approved cloud/IaC provisioning plan using authorized credentials. After provisioning, Environment Assessment is re-run to create the verified customer-environment evidence snapshot.
+
+
+## Platform Workspace operating model
+
+After Architecture approval, the engagement explicitly confirms the final target platform. Platform Workspace then collects only project configuration (platform, cloud/hosting, existing-vs-provision path, endpoint and secret references). Secrets are never stored in the project database.
+
+C INVENT derives an explainable onboarding state such as `NOT_SELECTED`, `ENDPOINT_REQUIRED`, `CREDENTIALS_REQUIRED`, `READY_TO_VERIFY`, `PROVISIONING_PLAN_REQUIRED`, `PLAN_READY` or `VERIFIED`. Endpoint patterns may auto-detect the platform, but detection is not verification.
+
+For an existing environment, C INVENT verifies through a customer-owned adapter/credential reference. For a new environment, C INVENT generates a reviewable platform-specific provisioning/IaC plan; execution requires authorized customer/cloud credentials and human approval. Only after verification is Environment Assessment allowed to claim customer-environment capability evidence.

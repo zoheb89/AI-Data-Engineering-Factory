@@ -20,7 +20,7 @@ class ProjectStore:
             c.executescript("""
             CREATE TABLE IF NOT EXISTS projects(
                 id TEXT PRIMARY KEY, name TEXT, domain TEXT, description TEXT,
-                created_at TEXT, updated_at TEXT, source TEXT DEFAULT 'legacy');
+                created_at TEXT, updated_at TEXT, source TEXT DEFAULT 'legacy', platform_config_json TEXT DEFAULT '{}');
             CREATE TABLE IF NOT EXISTS documents(
                 id TEXT PRIMARY KEY, project_id TEXT, name TEXT, mime_type TEXT,
                 size_bytes INTEGER, text TEXT, metadata_json TEXT, created_at TEXT);
@@ -41,6 +41,8 @@ class ProjectStore:
             cols = {row[1] for row in c.execute("PRAGMA table_info(projects)").fetchall()}
             if "source" not in cols:
                 c.execute("ALTER TABLE projects ADD COLUMN source TEXT DEFAULT 'legacy'")
+            if "platform_config_json" not in cols:
+                c.execute("ALTER TABLE projects ADD COLUMN platform_config_json TEXT DEFAULT '{}'")
 
     def now(self): return datetime.now(timezone.utc).isoformat()
 
@@ -124,7 +126,7 @@ class ProjectStore:
                     (self.now(), keep["id"]),
                 )
 
-            used_names = {r[0] for r in c.execute("SELECT name FROM projects WHERE name IS NOT NULL").fetchall()}
+            used_names = {r[0] for r in c.execute("SELECT name FROM projects WHERE name IS NOT NULL AND name <> 'Untitled Customer Project'").fetchall()}
             for p in rows:
                 pid = p["id"]
                 exists = c.execute("SELECT 1 FROM projects WHERE id=?", (pid,)).fetchone()
@@ -143,7 +145,13 @@ class ProjectStore:
                     c.execute("SELECT 1 FROM audit WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
                     bool(description),
                 ])
-                base = f"{domain} Modernization Project" if domain and domain.lower() != "unknown" else ("Customer Modernization Project" if has_data else "New Customer Project")
+                # Never leave an Untitled Customer Project visible. Preserve the
+                # project id/evidence and give legacy/user placeholders a safe name.
+                # Explicitly created named projects are untouched.
+                if domain and domain.lower() != "unknown":
+                    base = f"{domain} Modernization Project"
+                else:
+                    base = "Customer Modernization Project" if has_data else "New Customer Project"
                 name = base
                 if name in used_names:
                     name = f"{base} · {pid[:8]}"
@@ -167,7 +175,21 @@ class ProjectStore:
     def get_project(self, pid):
         with self.conn() as c:
             x = c.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
-            return dict(x)
+            item = dict(x)
+            try:
+                item["platform_config"] = json.loads(item.get("platform_config_json") or "{}")
+            except Exception:
+                item["platform_config"] = {}
+            return item
+
+    def get_platform_config(self, pid):
+        return self.get_project(pid).get("platform_config") or {}
+
+    def save_platform_config(self, pid, config):
+        config = config or {}
+        with self.conn() as c:
+            c.execute("UPDATE projects SET platform_config_json=?, updated_at=? WHERE id=?",
+                      (json.dumps(config, ensure_ascii=False), self.now(), pid))
 
     def update_project(self, pid, name=None, domain=None, description=None):
         p = self.get_project(pid)

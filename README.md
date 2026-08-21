@@ -1,6 +1,6 @@
 # C INVENT — Full POC Build
 
-**Streamlit + GitHub + Capgemini GPT-5.1 + Databricks Free Edition**
+**Streamlit + Capgemini GPT-5.1 + platform-neutral enterprise delivery control**
 
 C INVENT turns customer RFI/RFP/RFQ material, documents, spreadsheets and plain-English business requirements into a governed delivery blueprint and metadata-driven engineering plan.
 
@@ -44,7 +44,7 @@ The supplied Swagger screenshots establish:
 
 The API adapter sends `streaming: false` and uses the verified `x-api-key` header. The working Capgemini invocation also confirms that `workspaceId` is optional for the base LLM endpoint, so C INVENT omits it by default. Enable `CAPGEMINI_INCLUDE_WORKSPACE_ID=true` only when a confirmed tenant-specific value is required.
 
-## Databricks
+## Platform execution
 
 The POC is capability-aware. Free Edition is a quota-limited environment and is not an enterprise production environment. Do not use it as a commercial production deployment.
 
@@ -55,13 +55,13 @@ For live mutation, configure:
 
 ## Important
 
-The AI does not receive unrestricted Databricks credentials. It produces structured plans; C INVENT validates the plan and then uses controlled Databricks operations. Lakebase and Databricks Apps resource APIs change faster than the stable Jobs/Pipelines APIs, so the POC detects SDK support and produces a deployment specification when direct creation is not safely available.
+The target platform is selected per engagement. C INVENT stores platform metadata, not customer secrets, and derives an explainable onboarding state. Existing environments use customer-owned credential references; new environments use a reviewable cloud/IaC provisioning plan. The POC has a concrete Databricks execution adapter, while other platforms remain platform-neutral until their adapter is configured.
 
 ## Demo
 
 See `sample_customer/weqayah/`. All content is synthetic.
 
-Live resource creation paths use the current Databricks workspace APIs for Lakebase Autoscaling project creation and Databricks App creation/deployment. They remain protected by the mutation gate.
+Live resource creation is available only when the selected customer platform has a concrete adapter, the customer environment is verified, and the deployment approval gate is satisfied.
 
 
 ### Capgemini workspaceId
@@ -74,7 +74,7 @@ The Capgemini POC now keeps agent requests compact, uses a 1,200-token default o
 
 ## Governed delivery lifecycle
 
-C INVENT 0.1.13 enforces the delivery sequence below. Intake does not perform platform capability checks.
+C INVENT 0.1.17 enforces the delivery sequence below. Intake does not perform platform capability checks.
 
 **Intake → Discovery → Environment Assessment → Assessment → Architecture → Metadata → Engineering → Validate → Deploy → Operate**
 
@@ -101,10 +101,10 @@ C INVENT deliberately separates control from execution.
 
 **Delivery Workspace** = the place where the stage is actually performed and its artifacts are generated. Intake captures evidence; Discovery interprets it; Environment Assessment verifies applicable platform capabilities; Assessment evaluates readiness; Architecture designs the target; Metadata and Engineering produce implementation assets.
 
-**Platform Workspace** = controlled Databricks/Lakebase/AI-BI execution and consumption capabilities.
+**Platform Workspace** = customer target-platform onboarding, provisioning/connection planning, verification, execution and consumption. It is not a hard-coded Databricks workspace.
 
 The Control Plane may open the relevant Workspace, but it does not duplicate the stage's execution controls. This prevents the Command Center from becoming a second application that performs every task.
 
 ## Project creation
 
-Projects are never auto-created on startup. **New Customer Project** requires a customer/project name, domain and optional business intent. Legacy `Untitled Customer Project` records are renamed in place without deleting their evidence or history.
+Projects are never auto-created on startup. **New Customer Project** requires a customer/project name, domain and optional business intent. Legacy or placeholder `Untitled Customer Project` records are renamed in place without deleting their evidence or history; no Untitled project is created on startup.

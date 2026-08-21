@@ -2,10 +2,10 @@ import base64
 import requests
 
 class DatabricksClient:
-    def __init__(self, settings):
+    def __init__(self, settings, host=None, token=None):
         self.settings = settings
-        self.host = (settings.db_host or "").rstrip("/")
-        self.token = settings.db_token
+        self.host = (host if host is not None else settings.db_host or "").rstrip("/")
+        self.token = token if token is not None else settings.db_token
         self.configured = bool(self.host and self.token)
         self.headers = {
             "Authorization": f"Bearer {self.token}",

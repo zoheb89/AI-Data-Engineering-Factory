@@ -7,6 +7,7 @@ from c_invent.services.document_intel import extract_upload
 from c_invent.agents.orchestrator import Orchestrator
 from c_invent.databricks.client import DatabricksClient
 from c_invent.ui.styles import inject_css
+from c_invent.services.platforms import PLATFORM_CATALOG, SUPPORTED_PLATFORMS, derive_state, detect_platform, normalize_platform, secret_status, secret_value
 
 st.set_page_config(page_title="C INVENT", page_icon="🧠", layout="wide")
 inject_css()
@@ -21,6 +22,7 @@ STAGES = [
     ("Environment Assessment", "environment"),
     ("Assessment", "assessment"),
     ("Architecture", "architecture"),
+    ("Platform Provisioning", "platform"),
     ("Metadata", "metadata"),
     ("Engineering", "engineering"),
     ("Validate", "validate"),
@@ -49,6 +51,9 @@ def state(pid):
     assessment = latest(pid, "assessment")
     architecture = latest(pid, "blueprint")
     architecture_approved = current_approval(pid, "blueprint", architecture)
+    platform_config = store.get_platform_config(pid)
+    platform_state = derive_state(platform_config)
+    platform_ready = bool(architecture_approved and platform_state.get("state") in {"VERIFIED", "PLAN_READY"})
     metadata = latest(pid, "metadata")
     engineering = latest(pid, "engineering")
     validate = latest(pid, "qa")
@@ -59,6 +64,9 @@ def state(pid):
         "assessment": bool(assessment and environment and fresh(assessment, environment)),
         "architecture": bool(architecture and assessment and fresh(architecture, assessment)),
         "architecture_approved": architecture_approved,
+        "platform_config": platform_config,
+        "platform_state": platform_state,
+        "platform": platform_ready,
         "metadata": bool(metadata and architecture and fresh(metadata, architecture) and architecture_approved),
         "engineering": bool(engineering and metadata and fresh(engineering, metadata) and architecture_approved),
         "validate": bool(validate and engineering and fresh(validate, engineering)),
@@ -85,6 +93,8 @@ def next_action(s):
         return "Generate Architecture"
     if not s["architecture_approved"]:
         return "Approve Architecture"
+    if not s["platform"]:
+        return "Configure Target Platform"
     if not s["metadata"]:
         return "Generate Metadata"
     if not s["engineering"]:
@@ -118,6 +128,48 @@ def render_stepper(s):
 
 def gate_message(text):
     st.warning(text)
+
+
+def next_workspace_button(label, target, key):
+    """Visible hand-off from a completed stage to the next Delivery Workspace."""
+    st.markdown(f"**Next stage:** {label}")
+    if st.button(f"Continue to {label} →", key=key, type="primary", use_container_width=True):
+        st.session_state.active_page = target
+        st.rerun()
+
+
+def evidence_scope_cards():
+    st.markdown("### Assessment scope")
+    st.caption("The Current-State Assessment is a delivery-readiness gate. It assesses the use case and evidence needed to proceed — not merely whether Databricks is connected.")
+    cols = st.columns(4)
+    cards = [
+        ("Business / Use Case", "Objectives, processes, actors and requirements."),
+        ("Data / Sources", "Current systems, source inventory, migration evidence and gaps."),
+        ("Platform / Environment", "Target/current platform, verified access and capability evidence."),
+        ("Governance / Delivery", "Security, privacy, compliance, SLAs, RPO/RTO and dependencies."),
+    ]
+    for col, (title, text) in zip(cols, cards):
+        with col:
+            st.markdown(f'<div class="scope-card"><div class="scope-title">{title}</div><div class="scope-text">{text}</div></div>', unsafe_allow_html=True)
+    st.info("Evidence rule: Customer-stated facts, discovered evidence, verified platform evidence, assumptions and unknowns are kept separate. A connector being configured does not prove the customer's target environment is production-ready.")
+
+
+def workspace_roles():
+    st.markdown("### How C INVENT is separated")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("**CONTROL PLANE**")
+        st.caption("Control and governance")
+        st.write("Owns project identity, lifecycle state, evidence lineage, readiness gates, approvals, audit and the next-action recommendation. It does not perform the stage work.")
+    with c2:
+        st.markdown("**DELIVERY WORKSPACE**")
+        st.caption("Stage execution")
+        st.write("Performs Intake, Discovery, Environment Assessment, Current-State Assessment, Architecture, Metadata, Engineering and Validation. Each stage consumes upstream evidence and creates artifacts/runs.")
+    with c3:
+        st.markdown("**PLATFORM WORKSPACE**")
+        st.caption("Target-platform execution")
+        st.write("Handles Databricks, Lakebase, Apps and AI/BI implementation/consumption. Mutations stay behind validation, approval and the deployment gate.")
+    st.caption("Flow: Customer evidence → Delivery Workspace stage → persisted artifact/evidence → Control Plane gate → next Workspace. The Control Plane coordinates; it does not duplicate execution.")
 
 
 # Workspace/project bootstrap.
@@ -204,12 +256,13 @@ with st.sidebar:
         nav_button("3 · Environment Assessment", "Environment Assessment")
         nav_button("4 · Current-State Assessment", "Assessment")
         nav_button("5 · Solution Blueprint", "Solution Blueprint")
-        nav_button("6 · Metadata", "Metadata")
-        nav_button("7 · Engineering Factory", "Engineering Factory")
+        nav_button("6 · Platform Workspace", "Platform Workspace")
+        nav_button("7 · Metadata", "Metadata")
+        nav_button("8 · Engineering Factory", "Engineering Factory")
 
         st.markdown("**PLATFORM WORKSPACE**")
         st.caption("Target-platform implementation and consumption")
-        nav_button("Databricks Factory", "Databricks Factory")
+        nav_button("Platform Factory", "Platform Factory")
         nav_button("Lakebase & Apps", "Lakebase & Apps")
         nav_button("AI/BI & Genie", "AI/BI & Genie")
         nav_button("AI Lab", "AI Lab")
@@ -240,17 +293,27 @@ if page == "Command Center":
         ("Artifacts", str(store.count_artifacts(project["id"])), "Governed delivery outputs"),
         ("Approvals", str(store.count_approvals(project["id"])), "Human control decisions"),
         ("AI Provider", "Configured" if settings.llm_api_key and settings.llm_base_url else "Not configured", "Capgemini gateway"),
-        ("Databricks", "Connected" if db.configured else "Not configured", "Platform connectivity"),
+        ("Customer Platform", s.get("platform_state", {}).get("label", "Not selected"), "Project-owned target state"),
     ]
-    metric_cols = st.columns(3)
+    metric_cols = st.columns(6)
     for i, (label, value, hint) in enumerate(metrics):
-        with metric_cols[i % 3]:
+        with metric_cols[i]:
             st.markdown(
                 f'<div class="metric-card"><div class="metric-label">{label}</div>'
                 f'<div class="metric-value">{value}</div><div class="metric-hint">{hint}</div></div>',
                 unsafe_allow_html=True,
             )
 
+    workspace_roles()
+    st.markdown("### Platform boundary")
+    pcfg = s.get("platform_config") or {}
+    pst = s.get("platform_state") or {}
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("Target", pcfg.get("platform") or "Not selected")
+    b2.metric("Deployment path", pcfg.get("environment_mode") or "Not selected")
+    b3.metric("Onboarding state", pst.get("state", "NOT_SELECTED"))
+    b4.metric("C INVENT POC adapter", "Configured" if db.configured else "Not configured")
+    st.caption("The C INVENT POC adapter is control-plane/test infrastructure. It is never customer-environment evidence. Customer platform state comes only from the project-owned Platform Workspace configuration and verification.")
     st.divider()
     st.subheader("Delivery evidence & decision trail")
     st.caption("Every lifecycle decision is tied to a persisted artifact/run, its evidence source, and the gate it controls. C INVENT does not treat an AI response as proof by itself.")
@@ -261,6 +324,7 @@ if page == "Command Center":
         ("Environment Assessment", "Verified environment + applicable capabilities", "environment_assessment", "environment"),
         ("Current-State Assessment", "Delivery readiness across 4 dimensions", "assessment", "assessment"),
         ("Architecture", "Target-state design + decisions", "blueprint", "architecture"),
+        ("Platform", "Selected target + connection/provisioning readiness", "platform_plan", "platform"),
     ]
     ev_cols = st.columns([1.15, 2.35, 1.15, 1.55])
     for c, h in zip(ev_cols, ["Stage", "What it proves", "Status", "Evidence"]):
@@ -326,11 +390,12 @@ if page == "Command Center":
         "Run Current-State Assessment": ("Assessment", "Open Assessment Workspace"),
         "Generate Architecture": ("Solution Blueprint", "Open Architecture Workspace"),
         "Approve Architecture": ("Solution Blueprint", "Open Architecture Approval"),
+        "Configure Target Platform": ("Platform Workspace", "Open Platform Onboarding"),
         "Generate Metadata": ("Metadata", "Open Metadata Workspace"),
         "Generate Engineering": ("Engineering Factory", "Open Engineering Workspace"),
         "Run Validation": ("QA & Traceability", "Open Validation / QA"),
-        "Approve Deployment": ("Databricks Factory", "Open Deployment Controls"),
-        "Start Operations": ("Databricks Factory", "Open Operations Controls"),
+        "Approve Deployment": ("Platform Factory", "Open Deployment Controls"),
+        "Start Operations": ("Platform Factory", "Open Operations Controls"),
     }
     target, action_label = action_map.get(next_action(s), ("Command Center", "Review Delivery Status"))
     st.caption("The Control Plane coordinates lifecycle state, evidence, gates and approvals. It does not perform delivery work itself. Open the relevant Workspace to execute the next stage.")
@@ -408,6 +473,7 @@ elif page == "AI Discovery":
             else:
                 st.json(result)
                 st.success("Discovery completed.")
+                next_workspace_button("Environment Assessment", "Environment Assessment", "continue_after_discovery")
 
 elif page == "Environment Assessment":
     st.subheader("Environment Assessment")
@@ -417,23 +483,50 @@ elif page == "Environment Assessment":
     else:
         d = s["runs"]["discovery"]
         st.json(d.get("output") if d else {})
+        st.markdown("### Target decision vs. environment provisioning")
+        st.caption("Discovery captures what the customer wants or is considering. It does not provision the target. Architecture selects the governed target; Platform Workspace then connects an existing environment or executes an approved provisioning/IaC plan.")
         if st.button("Run Environment Assessment", type="primary"):
             with st.spinner("Evaluating environment and applicable capabilities..."):
-                result = orch.run_environment_assessment(project["id"], db.capability_report())
+                result = orch.run_environment_assessment(project["id"])
             if isinstance(result, dict) and result.get("error"):
                 st.error(result["error"])
             else:
                 st.json(result)
-                st.success("Environment Assessment completed.")
+                st.success("Environment Assessment completed and linked to Current-State Assessment.")
+                st.markdown("#### What this assessment actually proves")
+                status = result.get("target_platform_status", "unknown")
+                target = result.get("target_platform", "Unknown / to be confirmed")
+                if status == "customer_stated_direction":
+                    st.warning(f"Customer target direction: {target}. This is NOT a provisioned customer environment. The Databricks connection visible in this POC is a C INVENT control/test adapter and is not counted as customer evidence.")
+                elif status == "selected_not_provisioned":
+                    st.warning(f"Target selected: {target}, but the customer environment is NOT yet provisioned or verified. Use Platform Workspace to connect or provision it after architecture approval.")
+                else:
+                    st.info("Customer-environment capability evidence is shown only when the target is explicitly selected and an existing/provisioned environment is being verified.")
+                st.caption("Environment Assessment separates customer target intent, customer-environment evidence, and C INVENT's own POC/control-plane connectivity.")
+                st.info("Environment evidence is now persisted for this project. The next gate is Current-State Assessment, which consumes this exact Environment Assessment result.")
+                if st.button("Continue to Current-State Assessment →", key="continue_after_environment", type="primary", use_container_width=True):
+                    st.session_state.active_page = "Assessment"
+                    st.rerun()
 
 elif page == "Assessment":
     st.subheader("Current-State Assessment")
     st.caption("Assessment is an evidence-based delivery-readiness gate. It evaluates the business/use case, data and sources, platform/environment, and governance/delivery conditions. It does not treat a platform connection as proof of business readiness, and it does not require Capgemini to complete the gate.")
+    evidence_scope_cards()
     if not s["environment"]:
-        gate_message("Run a current Environment Assessment first.")
+        gate_message("Run a current Environment Assessment first. Once completed, C INVENT automatically links that persisted evidence to this gate.")
     else:
+        env_run = s["runs"].get("environment")
+        st.success("✓ Environment Assessment linked — current evidence is available to this gate.")
+        if env_run:
+            env_out = env_run.get("output") or {}
+            ec1, ec2, ec3 = st.columns(3)
+            ec1.metric("Environment Evidence", "Available")
+            ec2.metric("Target Platform", str(env_out.get("target_platform") or "Unknown"))
+            ec3.metric("Environment Run", str(env_run.get("id", ""))[:8])
+            with st.expander("View linked Environment Assessment evidence", expanded=False):
+                st.json(env_out)
         run = s["runs"]["assessment"]
-        if st.button("Run / Refresh Current-State Assessment", type="primary"):
+        if st.button("Run / Refresh Current-State Assessment", type="primary", use_container_width=True):
             with st.spinner("Building evidence-based Current-State Assessment..."):
                 result = orch.run_assessment(project["id"])
             if isinstance(result, dict) and result.get("error"):
@@ -444,6 +537,9 @@ elif page == "Assessment":
         run = s["runs"]["assessment"]
         if run and isinstance(run.get("output"), dict):
             out = run["output"]
+            p_dim = (out.get("dimensions") or {}).get("platform_and_environment") or {}
+            if p_dim.get("target_platform_status") == "customer_stated_direction":
+                st.warning("Platform target is only a customer-stated direction at this point. The connected Databricks workspace used by this POC is not evidence that the customer's target environment has been provisioned. Architecture approval and Platform Workspace provisioning/connection are still required.")
             decision = out.get("decision", "UNKNOWN")
             if decision.startswith("GO"):
                 st.success(f"Assessment decision: {decision}")
@@ -507,6 +603,8 @@ elif page == "Assessment":
             for x in out.get("recommended_next_actions", []):
                 st.write("→ " + str(x))
 
+            next_workspace_button("Solution Blueprint / Architecture", "Solution Blueprint", "continue_after_assessment")
+
             with st.expander("Traceability", expanded=False):
                 st.json(out.get("traceability", {}))
         elif not run:
@@ -528,6 +626,25 @@ elif page == "Solution Blueprint":
         run = s["runs"]["architecture"]
         if run:
             st.json(run.get("output"))
+            st.markdown("### Final target-platform decision")
+            st.caption("Architecture recommends; the engagement team explicitly confirms the platform. C INVENT does not infer a provisioned customer environment from its own POC connection.")
+            existing_cfg = store.get_platform_config(project["id"])
+            rec = existing_cfg.get("platform") or ""
+            options = [""] + SUPPORTED_PLATFORMS
+            default_index = options.index(rec) if rec in options else 0
+            selected_platform = st.selectbox("Target data platform", options, index=default_index, format_func=lambda x: "Select platform..." if not x else x)
+            cloud_options = ["", "Azure", "AWS", "GCP", "On-premises", "Other"]
+            selected_cloud = st.selectbox("Cloud / hosting", cloud_options, index=(cloud_options.index(existing_cfg.get("cloud")) if existing_cfg.get("cloud") in cloud_options else 0))
+            if selected_platform:
+                meta = PLATFORM_CATALOG[selected_platform]
+                st.info(f"Platform type: {meta['type']} · Supported hosting: {', '.join(meta['clouds'])} · Endpoint hint: {meta['endpoint_hint']}")
+            if st.button("Confirm Final Platform Decision", type="primary", disabled=not bool(selected_platform)):
+                cfg = dict(existing_cfg)
+                cfg.update({"platform": selected_platform, "cloud": selected_cloud, "decision_status": "selected", "decision_source": "human_architecture_decision", "decision_at": store.now()})
+                store.save_platform_config(project["id"], cfg)
+                store.add_audit(project["id"], "platform:decision", "success", json.dumps({k:cfg.get(k) for k in ("platform","cloud","decision_status","decision_source")}))
+                st.success(f"Final target platform confirmed: {selected_platform}. Next: configure the customer environment in Platform Workspace.")
+                st.rerun()
             approved = s["architecture_approved"]
             if approved:
                 st.success("Current Architecture is approved.")
@@ -538,11 +655,86 @@ elif page == "Solution Blueprint":
                         store.add_approval(project["id"], "blueprint", "User approved the current C INVENT Architecture/Blueprint.")
                         st.success("Architecture approval recorded.")
                         st.rerun()
+            if approved:
+                next_workspace_button("Platform Workspace", "Platform Workspace", "continue_after_architecture")
+
+elif page == "Platform Workspace":
+    st.subheader("Platform Workspace — Target Provisioning & Connection")
+    st.caption("This is the customer-platform boundary. C INVENT is platform-neutral: the project chooses the target, then the engineer supplies environment details. C INVENT detects what it can, generates the next state, and never treats its own POC connection as customer evidence.")
+    cfg = dict(store.get_platform_config(project["id"]))
+    current = derive_state(cfg)
+    st.markdown("### 1. Target platform")
+    options = [""] + SUPPORTED_PLATFORMS
+    current_platform = cfg.get("platform") or ""
+    platform = st.selectbox("Platform", options, index=(options.index(current_platform) if current_platform in options else 0), format_func=lambda x: "Select platform..." if not x else x)
+    if platform:
+        st.caption(f"{PLATFORM_CATALOG[platform]['type']} · Clouds: {', '.join(PLATFORM_CATALOG[platform]['clouds'])}")
+    c1, c2 = st.columns(2)
+    with c1:
+        cloud_options = ["", "Azure", "AWS", "GCP", "On-premises", "Other"]
+        cloud = st.selectbox("Cloud / hosting", cloud_options, index=(cloud_options.index(cfg.get("cloud")) if cfg.get("cloud") in cloud_options else 0))
+    with c2:
+        mode_options = ["", "existing", "provision"]
+        mode = st.selectbox("Customer environment path", mode_options, index=(mode_options.index(cfg.get("environment_mode")) if cfg.get("environment_mode") in mode_options else 0), format_func=lambda x: "Select path..." if not x else ("Connect existing customer environment" if x == "existing" else "Provision via approved cloud / IaC plan"))
+    st.markdown("### 2. Engineer-provided environment settings")
+    endpoint = st.text_input("Customer platform endpoint / account URL", value=cfg.get("endpoint", ""), placeholder="Paste the customer endpoint; C INVENT will auto-detect the platform where possible")
+    credential_ref = st.text_input("Credential reference (secret NAME only)", value=cfg.get("credential_ref", ""), placeholder="Example: CINVENT_CUSTOMER_DATABRICKS_HOST,CINVENT_CUSTOMER_DATABRICKS_TOKEN", help="Do not paste a token or password. Reference the secret names configured in the deployment environment.")
+    detected = detect_platform(endpoint, platform) if endpoint else ""
+    if detected:
+        if platform and detected != platform and platform != "Other":
+            st.error(f"Auto-detected platform: {detected}. This does not match the selected platform {platform}.")
+        else:
+            st.success(f"Auto-detected platform: {detected}")
+    if st.button("Save Platform Configuration", type="primary"):
+        cfg.update({"platform": platform, "cloud": cloud, "environment_mode": mode, "endpoint": endpoint.strip(), "credential_ref": credential_ref.strip(), "decision_status": "selected" if platform else "not_selected", "updated_at": store.now()})
+        store.save_platform_config(project["id"], cfg)
+        store.add_audit(project["id"], "platform:configuration", "success", json.dumps({k:cfg.get(k) for k in ("platform","cloud","environment_mode","endpoint","credential_ref","decision_status")}))
+        st.success("Platform configuration saved. C INVENT recalculated the onboarding state.")
+        st.rerun()
+
+    cfg = store.get_platform_config(project["id"])
+    current = derive_state(cfg)
+    st.markdown("### 3. C INVENT platform state")
+    st.info(f"**{current['state']} — {current['label']}**\n\nNext action: {current['next_action']}")
+    if cfg.get("platform") and cfg.get("environment_mode") == "existing":
+        sec = secret_status(cfg)
+        st.write("**Customer credential status:**", "Available" if sec.get("configured") else "Not available")
+    if cfg.get("platform") and cfg.get("decision_status") == "selected":
+        if st.button("Generate Platform Onboarding Plan", type="primary"):
+            with st.spinner("Formulating the platform-specific onboarding state and controlled execution plan..."):
+                plan = orch.generate_platform_plan(project["id"])
+            if plan.get("error"):
+                st.error(plan["error"])
+            else:
+                st.success("Platform onboarding plan generated and persisted as project evidence.")
+                st.json(plan)
+                st.rerun()
+    if cfg.get("provisioning_plan"):
+        with st.expander("View platform plan / evidence", expanded=True):
+            st.json(cfg["provisioning_plan"])
+    if current["state"] == "READY_TO_VERIFY":
+        st.info("Verification is available for supported adapters. For Databricks, C INVENT uses the customer endpoint and the referenced customer secret — never the global POC credentials.")
+        if st.button("Verify Customer Platform", type="primary"):
+            with st.spinner("Verifying customer platform capabilities..."):
+                result = orch.run_environment_assessment(project["id"])
+            if result.get("error"):
+                st.error(result["error"])
+            else:
+                st.success("Customer environment verification completed. Refresh Environment Assessment to consume the evidence snapshot.")
+                st.json(result.get("platform_capability_evidence", {}))
+    if current["state"] == "VERIFIED":
+        st.success("Customer platform is verified. This is the only state that can be used as verified customer-environment evidence.")
+        next_workspace_button("Metadata", "Metadata", "continue_after_platform")
+    elif current["state"] == "PLAN_READY":
+        st.warning("Provisioning plan is ready. Human approval and authorized execution are still required before the environment can be called verified.")
+        next_workspace_button("Metadata", "Metadata", "continue_after_platform_plan")
 
 elif page == "Metadata":
     st.subheader("Metadata & Canonical Data Model")
     if not s["architecture_approved"]:
         gate_message("Metadata is locked until the current Architecture is approved.")
+    elif not s["platform"]:
+        gate_message("Complete Platform Workspace: confirm the target and reach VERIFIED or PLAN_READY before Metadata.")
     elif not s["architecture"]:
         gate_message("Generate Architecture first.")
     else:
@@ -554,6 +746,7 @@ elif page == "Metadata":
             else:
                 st.json(result)
                 st.success("Metadata generated.")
+                next_workspace_button("Engineering Factory", "Engineering Factory", "continue_after_metadata")
 
 elif page == "Engineering Factory":
     st.subheader("AI Engineering Factory")
@@ -573,26 +766,47 @@ elif page == "Engineering Factory":
             for a in store.artifacts(project["id"]):
                 with st.expander(f"{a['kind']} · {a['name']}"):
                     st.code(a["content"], language=a["language"] or "text")
+            next_workspace_button("Validation / QA", "QA & Traceability", "continue_after_engineering")
 
-elif page == "Databricks Factory":
-    st.subheader("Databricks Factory")
-    st.caption("Read-only capability evidence is available during Environment Assessment. Mutations are blocked until validation and deployment approval.")
-    st.json(db.capability_report())
-    st.caption(f"Mutation gate: {'ENABLED' if settings.allow_mutations else 'DISABLED'}")
+elif page == "Platform Factory":
+    st.subheader("Platform Factory — Target Platform Execution")
+    cfg = store.get_platform_config(project["id"])
+    pst = derive_state(cfg)
+    target = normalize_platform(cfg.get("platform")) if cfg.get("platform") else ""
+    st.caption("Execution is generic at the C INVENT control level. A concrete platform adapter is invoked only for the selected customer target; the global POC connector is never used as customer evidence.")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Customer target", target or "Not selected")
+    c2.metric("Onboarding state", pst.get("state", "NOT_SELECTED"))
+    c3.metric("Environment", "Verified" if pst.get("state") == "VERIFIED" else "Not verified")
+
     if not s["validate"]:
-        gate_message("Databricks mutations are locked until Engineering is validated.")
+        gate_message("Platform execution is locked until Engineering is validated.")
     elif not current_approval(project["id"], "deployment", s["runs"]["validate"]):
         if st.button("Approve Deployment", type="primary"):
             store.add_approval(project["id"], "deployment", "User approved deployment after validation.")
             st.success("Deployment approval recorded.")
             st.rerun()
+    elif not target:
+        gate_message("Select and confirm a target platform in Solution Blueprint / Platform Workspace.")
+    elif target != "Databricks":
+        st.info(f"C INVENT has no executable {target} mutation adapter in this POC. The platform-neutral lifecycle is ready for the approved adapter/IaC implementation.")
+        if cfg.get("provisioning_plan"):
+            st.json(cfg["provisioning_plan"])
     else:
-        if st.button("Create Lakeflow Pipeline", type="primary"):
-            st.json(orch.create_lakeflow(project["id"], db))
-        if st.button("Create Lakeflow Job"):
-            st.json(orch.create_job(project["id"], db))
-        if st.button("Run Latest C INVENT Job"):
-            st.json(orch.run_latest_job(project["id"], db))
+        refs = [x.strip() for x in str(cfg.get("credential_ref") or "").split(",") if x.strip()]
+        token = secret_value(refs[-1]) if refs else ""
+        customer_db = DatabricksClient(settings, host=cfg.get("endpoint"), token=token)
+        if pst.get("state") != "VERIFIED" or not customer_db.configured:
+            gate_message("Databricks execution requires a VERIFIED customer environment and a customer-owned credential reference. The C INVENT POC Databricks connection is not used here.")
+        else:
+            st.success("Verified customer Databricks environment selected. Execution controls below operate against that customer endpoint.")
+            st.json(customer_db.capability_report())
+            if st.button("Create Lakeflow Pipeline", type="primary"):
+                st.json(orch.create_lakeflow(project["id"], customer_db))
+            if st.button("Create Lakeflow Job"):
+                st.json(orch.create_job(project["id"], customer_db))
+            if st.button("Run Latest C INVENT Job"):
+                st.json(orch.run_latest_job(project["id"], customer_db))
 
 elif page == "Lakebase & Apps":
     st.subheader("Lakebase & Databricks Apps")
@@ -643,6 +857,8 @@ elif page == "QA & Traceability":
             st.success("Current Engineering has been validated.")
         if st.button("Run Full Readiness Review"):
             st.json(orch.run_full_qa(project["id"]))
+        if s["validate"]:
+            next_workspace_button("Platform Factory / Deployment Controls", "Platform Factory", "continue_after_validation")
 
 elif page == "AI Lab":
     st.subheader("Capgemini GPT-5.1 Test")
