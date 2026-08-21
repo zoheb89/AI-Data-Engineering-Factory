@@ -9,14 +9,14 @@ import re
 from datetime import datetime, timezone
 
 PLATFORM_CATALOG = {
-    "Databricks": {"type": "SaaS", "clouds": ["Azure", "AWS", "GCP"], "endpoint_hint": "*.cloud.databricks.com"},
-    "Microsoft Fabric": {"type": "SaaS", "clouds": ["Azure"], "endpoint_hint": "app.fabric.microsoft.com"},
-    "Snowflake": {"type": "SaaS", "clouds": ["Azure", "AWS", "GCP"], "endpoint_hint": "<account>.<region>.snowflakecomputing.com"},
-    "BigQuery": {"type": "SaaS", "clouds": ["GCP"], "endpoint_hint": "bigquery.googleapis.com"},
-    "Amazon Redshift": {"type": "PaaS", "clouds": ["AWS"], "endpoint_hint": "<cluster>.<region>.redshift.amazonaws.com"},
-    "Azure Synapse": {"type": "PaaS", "clouds": ["Azure"], "endpoint_hint": "<workspace>.sql.azuresynapse.net"},
-    "Azure SQL": {"type": "PaaS", "clouds": ["Azure"], "endpoint_hint": "<server>.database.windows.net"},
-    "Other": {"type": "Custom", "clouds": ["Azure", "AWS", "GCP", "On-premises", "Other"], "endpoint_hint": "Customer supplied"},
+    "Databricks": {"type": "SaaS", "clouds": ["Azure", "AWS", "GCP"], "endpoint_hint": "*.cloud.databricks.com", "fit_profile": {"data_engineering": 0.96, "application": 0.72, "lakehouse": 0.97, "warehouse": 0.82, "governance": 0.92, "integration": 0.88, "analytics_ai": 0.95}},
+    "Microsoft Fabric": {"type": "SaaS", "clouds": ["Azure"], "endpoint_hint": "app.fabric.microsoft.com", "fit_profile": {"data_engineering": 0.88, "application": 0.62, "lakehouse": 0.86, "warehouse": 0.92, "governance": 0.90, "integration": 0.84, "analytics_ai": 0.90}},
+    "Snowflake": {"type": "SaaS", "clouds": ["Azure", "AWS", "GCP"], "endpoint_hint": "<account>.<region>.snowflakecomputing.com", "fit_profile": {"data_engineering": 0.88, "application": 0.68, "lakehouse": 0.84, "warehouse": 0.97, "governance": 0.95, "integration": 0.90, "analytics_ai": 0.88}},
+    "BigQuery": {"type": "SaaS", "clouds": ["GCP"], "endpoint_hint": "bigquery.googleapis.com", "fit_profile": {"data_engineering": 0.88, "application": 0.62, "lakehouse": 0.80, "warehouse": 0.96, "governance": 0.88, "integration": 0.82, "analytics_ai": 0.96}},
+    "Amazon Redshift": {"type": "PaaS", "clouds": ["AWS"], "endpoint_hint": "<cluster>.<region>.redshift.amazonaws.com", "fit_profile": {"data_engineering": 0.78, "application": 0.62, "lakehouse": 0.68, "warehouse": 0.92, "governance": 0.82, "integration": 0.84, "analytics_ai": 0.78}},
+    "Azure Synapse": {"type": "PaaS", "clouds": ["Azure"], "endpoint_hint": "<workspace>.sql.azuresynapse.net", "fit_profile": {"data_engineering": 0.82, "application": 0.60, "lakehouse": 0.74, "warehouse": 0.90, "governance": 0.88, "integration": 0.90, "analytics_ai": 0.82}},
+    "Azure SQL": {"type": "PaaS", "clouds": ["Azure"], "endpoint_hint": "<server>.database.windows.net", "fit_profile": {"data_engineering": 0.62, "application": 0.94, "lakehouse": 0.42, "warehouse": 0.76, "governance": 0.90, "integration": 0.96, "analytics_ai": 0.68}},
+    "Other": {"type": "Custom", "clouds": ["Azure", "AWS", "GCP", "On-premises", "Other"], "endpoint_hint": "Customer supplied", "fit_profile": {"data_engineering": 0.55, "application": 0.55, "lakehouse": 0.55, "warehouse": 0.55, "governance": 0.55, "integration": 0.55, "analytics_ai": 0.55}},
 }
 
 SUPPORTED_PLATFORMS = list(PLATFORM_CATALOG)

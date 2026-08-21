@@ -8,9 +8,32 @@ from c_invent.agents.orchestrator import Orchestrator
 from c_invent.databricks.client import DatabricksClient
 from c_invent.ui.styles import inject_css
 from c_invent.services.platforms import PLATFORM_CATALOG, SUPPORTED_PLATFORMS, derive_state, detect_platform, normalize_platform, secret_status, secret_value
+from c_invent.services.action_registry import next_action_spec, applicable_actions, action_context
+from c_invent.services.architecture_view import platform_fit, architecture_model, selected_platform_evaluation
 
 st.set_page_config(page_title="C INVENT", page_icon="🧠", layout="wide")
 inject_css()
+
+st.markdown("""
+<style>
+.arch-shell{border:1px solid #e5e7eb;border-radius:18px;background:#fbfcfe;padding:18px;margin:8px 0 18px;overflow-x:auto}
+.arch-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}
+.arch-eyebrow{font-size:11px;letter-spacing:.12em;font-weight:800;color:#ff3621}
+.arch-main{font-size:20px;font-weight:800;margin-top:4px}
+.arch-target{min-width:250px;padding:12px 14px;border:1px solid #dbe2ea;border-radius:12px;background:#fff;font-size:14px}
+.arch-target span{color:#667085;font-size:12px}
+.arch-flow{display:flex;align-items:stretch;gap:0;min-width:1120px}
+.arch-node-wrap{display:flex;align-items:stretch;flex:1}
+.arch-card{min-width:132px;flex:1;border:1px solid #dbe2ea;background:#fff;border-radius:13px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.arch-key{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#7b8491;font-weight:800}
+.arch-title{font-size:14px;font-weight:800;margin-top:6px;line-height:1.25}
+.arch-detail{font-size:11px;color:#667085;margin-top:7px;line-height:1.4}
+.arch-arrow{font-size:22px;font-weight:800;color:#98a2b3;padding:38px 8px 0}
+.arch-cross{margin-top:18px;padding-top:14px;border-top:1px dashed #cfd6df;font-size:12px;color:#667085}
+.arch-chip{display:inline-block;padding:5px 9px;border-radius:999px;background:#eef2f6;margin:7px 5px 0 0;font-size:11px;color:#475467}
+@media(max-width:900px){.arch-head{display:block}.arch-target{margin-top:12px}.arch-flow{min-width:1000px}}
+</style>
+""", unsafe_allow_html=True)
 settings = load_settings()
 store = ProjectStore()
 orch = Orchestrator(settings, store)
@@ -42,7 +65,9 @@ def get_platform_config_safe(pid):
     if callable(getter):
         try:
             return getter(pid) or {}
-        except (AttributeError, TypeError, KeyError):
+        except Exception:
+            # Compatibility boundary: a stale Streamlit process/module cache must
+            # never take down the control plane. Fall through to persisted JSON.
             pass
     try:
         project_row = store.get_project(pid)
@@ -107,31 +132,11 @@ def state(pid):
 
 
 def next_action(s):
-    if not s["intake"]:
-        return "Create Intake Pack"
-    if not s["discovery"]:
-        return "Run Discovery"
-    if not s["environment"]:
-        return "Run Environment Assessment"
-    if not s["assessment"]:
-        return "Run Current-State Assessment"
-    if not s["architecture"]:
-        return "Generate Architecture"
-    if not s["architecture_approved"]:
-        return "Approve Architecture"
-    if not s["platform"]:
-        return "Configure Target Platform"
-    if not s["metadata"]:
-        return "Generate Metadata"
-    if not s["engineering"]:
-        return "Generate Engineering"
-    if not s["validate"]:
-        return "Run Validation"
-    if not s["deploy"]:
-        return "Approve Deployment"
-    if not s["operate"]:
-        return "Start Operations"
-    return "Delivery Complete"
+    spec = next_action_spec(s)
+    return spec.title if spec else "Delivery Complete"
+
+def current_action(s):
+    return action_context(next_action_spec(s), s)
 
 
 def render_stepper(s):
@@ -151,6 +156,78 @@ def render_stepper(s):
         rows.append(f'<div class="stage {cls}"><div class="stage-icon">{icon}</div><div class="stage-label">{label}</div></div>')
     st.markdown('<div class="stepper">' + "".join(rows) + '</div>', unsafe_allow_html=True)
 
+
+
+def _safe_html(value):
+    import html
+    return html.escape(str(value or ""))
+
+
+def render_architecture_visual(model):
+    """Render the persisted architecture model as a source-to-consumption visual."""
+    if not model:
+        return
+    stages = ["source", "connectivity", "ingestion", "bronze", "silver", "gold", "consumption"]
+    cards = []
+    for key in stages:
+        item = model.get(key) or {}
+        cards.append(
+            f'<div class="arch-card"><div class="arch-key">{_safe_html(key.replace("_", " ").title())}</div>'
+            f'<div class="arch-title">{_safe_html(item.get("title"))}</div>'
+            f'<div class="arch-detail">{_safe_html(item.get("detail"))}</div></div>'
+        )
+    flow = '<div class="arch-flow">' + '<div class="arch-node-wrap">' + '</div><div class="arch-arrow">→</div><div class="arch-node-wrap">'.join(cards) + '</div></div>'
+    platform = model.get("platform") or {}
+    cross = model.get("cross_cutting") or []
+    cross_html = ''.join(f'<span class="arch-chip">{_safe_html(x)}</span>' for x in cross)
+    st.markdown(
+        '<div class="arch-shell">'
+        '<div class="arch-head"><div><div class="arch-eyebrow">TARGET SOLUTION FLOW</div>'
+        '<div class="arch-main">Source → Platform → Data Products → Consumption</div></div>'
+        f'<div class="arch-target"><b>{_safe_html(platform.get("title"))}</b><br><span>{_safe_html(platform.get("detail"))}</span></div></div>'
+        + flow +
+        f'<div class="arch-cross"><b>Cross-cutting controls</b><div>{cross_html}</div></div>'
+        '</div>', unsafe_allow_html=True)
+
+
+def render_platform_evaluation(rows, selected=""):
+    if not rows:
+        return
+    st.markdown("### Platform options — architecture fit, not customer commitment")
+    st.caption("The percentages are a normalized architecture-fit distribution from the current evidence and platform metadata. They are not a prediction of customer behavior. The business/engagement team still makes the final selection.")
+    top = rows[:5]
+    cols = st.columns(min(3, len(top)))
+    for idx, row in enumerate(top[:3]):
+        with cols[idx]:
+            label = "★ Recommended" if idx == 0 else ("Alternative" if idx < 3 else "")
+            st.metric(row["platform"], f'{row["fit_score"]:.1f}% fit', label or row["recommendation"])
+            st.progress(min(1.0, row["fit_score"] / 100.0))
+            if row.get("reasons"):
+                for reason in row["reasons"][:2]:
+                    st.caption("• " + reason)
+    with st.expander("Compare all candidate platforms", expanded=True):
+        headers = st.columns([2.0, 1.1, 1.2, 1.4, 2.8])
+        for c, h in zip(headers, ["Platform", "Fit", "Relative", "Clouds", "Why it scores"]):
+            c.markdown(f"**{h}**")
+        for row in rows:
+            r = st.columns([2.0, 1.1, 1.2, 1.4, 2.8])
+            r[0].write(("✓ " if row["platform"] == selected else "") + row["platform"])
+            r[1].write(f'{row["fit_score"]:.1f}%')
+            r[2].write(f'{row["relative_share"]:.1f}%')
+            r[3].write(", ".join(row.get("clouds", [])))
+            r[4].write("; ".join(row.get("reasons", [])) or row["recommendation"])
+
+
+def render_architecture_summary(run, selected_platform=""):
+    out = (run or {}).get("output") or {}
+    model = dict(out.get("architecture_visual") or {})
+    if selected_platform:
+        model = architecture_model({}, out, selected_platform) if not model else dict(model)
+        if model.get("platform") is not None:
+            model["platform"] = architecture_model({}, out, selected_platform)["platform"]
+    render_architecture_visual(model)
+    rows = out.get("platform_evaluation") or []
+    render_platform_evaluation(rows, selected_platform)
 
 def gate_message(text):
     st.warning(text)
@@ -310,8 +387,25 @@ st.markdown(
 
 if page == "Command Center":
     st.subheader("Delivery Control")
-    st.info(f"**Next recommended action: {next_action(s)}**")
+    action = current_action(s)
+    if action.get("action_id"):
+        st.info(f"**Next recommended action: {action['title']}**\n\n{action['description']}")
+        ac1, ac2, ac3 = st.columns(3)
+        ac1.metric("Action ID", action["action_id"])
+        ac2.metric("Workspace", action["workspace"])
+        ac3.metric("Expected output", action["expected_output"])
+        st.caption("This action is generated from the current persisted project state and evidence. The UI is a renderer of the action metadata; it does not decide the engagement path independently.")
+    else:
+        st.success("Delivery lifecycle complete.")
     render_stepper(s)
+    with st.expander("Generated action plan", expanded=False):
+        specs = applicable_actions(s)
+        if specs:
+            for spec in specs[:4]:
+                st.markdown(f"**{spec.id} · {spec.title}**")
+                st.caption(f"{spec.description} | Workspace: {spec.workspace} | Output: {spec.output} | Approval: {spec.approval}")
+        else:
+            st.caption("No further lifecycle actions are applicable.")
 
     metrics = [
         ("Documents", str(store.count_documents(project["id"])), "Customer evidence"),
@@ -491,7 +585,7 @@ elif page == "AI Discovery":
         st.error("AI provider is not configured. Use AI Connectivity to configure/test Capgemini GPT.")
     else:
         prompt = st.text_area("Discovery objective", value=project.get("description") or "Analyze this customer engagement.", height=120)
-        if st.button("Run Discovery Agent", type="primary"):
+        if st.button("Execute discovery.run", type="primary"): 
             with st.spinner("Analyzing evidence..."):
                 result = orch.run_discovery(project["id"], prompt)
             if isinstance(result, dict) and result.get("error"):
@@ -638,39 +732,100 @@ elif page == "Assessment":
 
 elif page == "Solution Blueprint":
     st.subheader("Solution Blueprint / Architecture")
+    st.caption("The blueprint is generated from persisted Discovery + Assessment evidence. The visual, platform comparison and next actions are generated from metadata; the raw JSON remains available for traceability.")
     if not s["assessment"]:
         gate_message("Architecture requires a current Assessment after Environment Assessment.")
     else:
         if st.button("Generate / Refresh Architecture", type="primary"):
-            with st.spinner("Designing target architecture..."):
+            with st.spinner("Designing target architecture from current evidence..."):
                 result = orch.run_blueprint(project["id"])
             if isinstance(result, dict) and result.get("error"):
                 st.error(result["error"])
             else:
-                st.success("Architecture generated.")
+                st.success("Architecture generated and presentation metadata persisted.")
                 st.rerun()
         run = s["runs"]["architecture"]
         if run:
-            st.json(run.get("output"))
-            st.markdown("### Final target-platform decision")
-            st.caption("Architecture recommends; the engagement team explicitly confirms the platform. C INVENT does not infer a provisioned customer environment from its own POC connection.")
+            out = run.get("output") or {}
             existing_cfg = get_platform_config_safe(project["id"])
-            rec = existing_cfg.get("platform") or ""
+            selected_platform = existing_cfg.get("platform") or ""
+
+            render_architecture_summary(run, selected_platform)
+
+            st.divider()
+            st.markdown("### Target-platform decision")
+            st.caption("Architecture recommends; the engagement team explicitly confirms. A platform appearing as the strongest candidate does not mean the customer environment is provisioned. C INVENT's POC connection is never used as customer evidence.")
+            rows = out.get("platform_evaluation") or platform_fit({}, {}, out)
+            if rows:
+                recommended = rows[0]["platform"]
+                rec = rows[0]
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Architecture recommendation", recommended)
+                c2.metric("Top fit", f'{rec["fit_score"]:.1f}%')
+                c3.metric("Relative recommendation share", f'{rec["relative_share"]:.1f}%')
+                st.info(f"Why {recommended}: " + ("; ".join(rec.get("reasons", [])) or "best normalized fit to the current evidence."))
+
             options = [""] + SUPPORTED_PLATFORMS
-            default_index = options.index(rec) if rec in options else 0
-            selected_platform = st.selectbox("Target data platform", options, index=default_index, format_func=lambda x: "Select platform..." if not x else x)
+            rec_platform = selected_platform or (rows[0]["platform"] if rows else "")
+            default_index = options.index(rec_platform) if rec_platform in options else 0
+            selected = st.selectbox("Final target data platform", options, index=default_index, format_func=lambda x: "Select platform..." if not x else x)
             cloud_options = ["", "Azure", "AWS", "GCP", "On-premises", "Other"]
-            selected_cloud = st.selectbox("Cloud / hosting", cloud_options, index=(cloud_options.index(existing_cfg.get("cloud")) if existing_cfg.get("cloud") in cloud_options else 0))
-            if selected_platform:
-                meta = PLATFORM_CATALOG[selected_platform]
-                st.info(f"Platform type: {meta['type']} · Supported hosting: {', '.join(meta['clouds'])} · Endpoint hint: {meta['endpoint_hint']}")
-            if st.button("Confirm Final Platform Decision", type="primary", disabled=not bool(selected_platform)):
+            selected_cloud = st.selectbox("Target cloud / hosting", cloud_options, index=(cloud_options.index(existing_cfg.get("cloud")) if existing_cfg.get("cloud") in cloud_options else 0))
+            if selected:
+                meta = PLATFORM_CATALOG[selected]
+                st.caption(f'{meta["type"]} · Supported clouds: {", ".join(meta["clouds"])} · Endpoint hint: {meta["endpoint_hint"]}')
+                chosen_eval = selected_platform_evaluation(rows, selected)
+                if chosen_eval:
+                    st.write(f'**Selected platform fit:** {chosen_eval["fit_score"]:.1f}% · **Relative share:** {chosen_eval["relative_share"]:.1f}%')
+
+            if st.button("Confirm Final Platform Decision", type="primary", disabled=not bool(selected)):
                 cfg = dict(existing_cfg)
-                cfg.update({"platform": selected_platform, "cloud": selected_cloud, "decision_status": "selected", "decision_source": "human_architecture_decision", "decision_at": store.now()})
+                cfg.update({
+                    "platform": selected,
+                    "cloud": selected_cloud,
+                    "decision_status": "selected",
+                    "decision_source": "human_architecture_decision",
+                    "decision_at": store.now(),
+                    "architecture_recommendation": rows[0]["platform"] if rows else "",
+                    "architecture_fit_snapshot": selected_platform_evaluation(rows, selected) if rows else {},
+                })
                 store.save_platform_config(project["id"], cfg)
-                store.add_audit(project["id"], "platform:decision", "success", json.dumps({k:cfg.get(k) for k in ("platform","cloud","decision_status","decision_source")}))
-                st.success(f"Final target platform confirmed: {selected_platform}. Next: configure the customer environment in Platform Workspace.")
+                store.add_audit(project["id"], "platform:decision", "success", json.dumps({k:cfg.get(k) for k in ("platform","cloud","decision_status","decision_source","architecture_recommendation")}))
+                st.success(f"Final target platform confirmed: {selected}. Next: configure the customer environment in Platform Workspace.")
                 st.rerun()
+
+            with st.expander("Full architecture detail", expanded=False):
+                # Human-friendly sections first; raw JSON remains the audit artifact.
+                for key, title in [
+                    ("summary", "Executive summary"),
+                    ("target_architecture", "Target architecture"),
+                    ("data_flow", "Data flow"),
+                    ("security_governance", "Security & governance"),
+                    ("environments", "Environments"),
+                    ("delivery_phases", "Delivery phases"),
+                    ("risks", "Risks & mitigations"),
+                    ("decisions", "Decisions"),
+                    ("open_questions", "Open questions"),
+                ]:
+                    value = out.get(key)
+                    if value:
+                        st.markdown(f"#### {title}")
+                        if isinstance(value, dict):
+                            for k, v in value.items():
+                                st.markdown(f"**{str(k).replace('_',' ').title()}**")
+                                if isinstance(v, list):
+                                    for item in v:
+                                        st.write("• " + str(item))
+                                else:
+                                    st.write(v)
+                        elif isinstance(value, list):
+                            for item in value:
+                                st.write("• " + str(item))
+                        else:
+                            st.write(value)
+                with st.expander("Raw JSON / traceability", expanded=False):
+                    st.json(out)
+
             approved = s["architecture_approved"]
             if approved:
                 st.success("Current Architecture is approved.")
@@ -764,7 +919,7 @@ elif page == "Metadata":
     elif not s["architecture"]:
         gate_message("Generate Architecture first.")
     else:
-        if st.button("Generate Metadata Model", type="primary"):
+        if st.button("Execute metadata.generate", type="primary"): 
             with st.spinner("Building canonical metadata..."):
                 result = orch.run_metadata(project["id"])
             if isinstance(result, dict) and result.get("error"):
@@ -779,7 +934,7 @@ elif page == "Engineering Factory":
     if not s["metadata"]:
         gate_message("Engineering is locked until current Metadata exists after the approved Architecture.")
     else:
-        if st.button("Generate Bronze / Silver / Gold", type="primary"):
+        if st.button("Execute engineering.generate", type="primary"): 
             with st.spinner("Generating medallion engineering..."):
                 result = orch.run_engineering(project["id"])
             if isinstance(result, dict) and result.get("error"):
@@ -808,7 +963,7 @@ elif page == "Platform Factory":
     if not s["validate"]:
         gate_message("Platform execution is locked until Engineering is validated.")
     elif not current_approval(project["id"], "deployment", s["runs"]["validate"]):
-        if st.button("Approve Deployment", type="primary"):
+        if st.button("Execute deployment.approve", type="primary"): 
             store.add_approval(project["id"], "deployment", "User approved deployment after validation.")
             st.success("Deployment approval recorded.")
             st.rerun()
@@ -840,7 +995,7 @@ elif page == "Lakebase & Apps":
         gate_message("Operational application creation is locked until validation.")
     else:
         st.info("Application architecture is generated from the approved delivery artifacts. Resource mutations remain approval-gated.")
-        if st.button("Generate Operational Application Architecture", type="primary"):
+        if st.button("Execute application.architecture.generate", type="primary"): 
             with st.spinner("Assessing application requirements..."):
                 st.json(orch.run_application_architecture(project["id"]))
         c1, c2 = st.columns(2)
@@ -871,7 +1026,7 @@ elif page == "QA & Traceability":
     if not s["engineering"]:
         gate_message("Validation requires current Engineering output.")
     else:
-        if st.button("Run Validation", type="primary"):
+        if st.button("Execute validation.run", type="primary"): 
             with st.spinner("Running end-to-end validation..."):
                 result = orch.run_qa(project["id"])
             if isinstance(result, dict) and result.get("error"):

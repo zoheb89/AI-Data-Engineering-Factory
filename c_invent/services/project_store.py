@@ -175,6 +175,8 @@ class ProjectStore:
     def get_project(self, pid):
         with self.conn() as c:
             x = c.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+            if not x:
+                return {}
             item = dict(x)
             try:
                 item["platform_config"] = json.loads(item.get("platform_config_json") or "{}")

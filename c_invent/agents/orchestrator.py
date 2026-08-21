@@ -1,6 +1,7 @@
 import json, re, os
 from c_invent.llm.capgemini import CapgeminiLLM
 from c_invent.services.platforms import normalize_platform, derive_state, secret_status, secret_value
+from c_invent.services.architecture_view import platform_fit, architecture_model
 from c_invent.agents import prompts
 
 class Orchestrator:
@@ -594,6 +595,14 @@ Use the following structured evidence only:
             )
             if isinstance(out, dict) and out.get("error") and len(out) == 1:
                 raise RuntimeError(out["error"])
+            # Presentation metadata is generated from persisted evidence, not from
+            # a hard-coded Databricks choice. It makes the blueprint human-readable
+            # while keeping the raw LLM blueprint intact for traceability.
+            out = dict(out or {})
+            discovery_out = discovery.get("output") if isinstance(discovery, dict) else {}
+            assessment_out = assessment.get("output") if isinstance(assessment, dict) else {}
+            out["platform_evaluation"] = platform_fit(discovery_out, assessment_out, out)
+            out["architecture_visual"] = architecture_model(discovery_out, out)
             self.store.save_run(pid, "blueprint", "success", system, out)
             self.store.add_audit(pid, "llm:blueprint", "success", json.dumps(out)[:4000])
             return out
@@ -620,6 +629,11 @@ Use the following structured evidence only:
                     },
                 )
                 if isinstance(out, dict) and not (out.get("error") and len(out) == 1):
+                    out = dict(out)
+                    discovery_out = discovery.get("output") if isinstance(discovery, dict) else {}
+                    assessment_out = assessment.get("output") if isinstance(assessment, dict) else {}
+                    out["platform_evaluation"] = platform_fit(discovery_out, assessment_out, out)
+                    out["architecture_visual"] = architecture_model(discovery_out, out)
                     self.store.save_run(pid, "blueprint", "success", system, out)
                     self.store.add_audit(pid, "llm:blueprint", "success", json.dumps(out)[:4000])
                     return out
