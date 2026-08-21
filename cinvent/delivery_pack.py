@@ -1,19 +1,18 @@
 from pathlib import Path
 import json
-from sqlalchemy import text
-from cinvent.db import engine, get_project
+from cinvent.db import connection, get_project
 from cinvent.canonical import model_from_artifacts
 from cinvent.generators import generate_pack
 from cinvent.config import settings
 
 def latest_artifacts(pid):
     out={}
-    with engine.connect() as c:
-        rows=c.execute(text("""SELECT stage,content FROM artifacts
-          WHERE project_id=:p ORDER BY created_at"""),{"p":pid})
+    with connection() as c:
+        rows=c.execute("""SELECT stage,content FROM artifacts
+          WHERE project_id=:p ORDER BY created_at""", {"p":pid})
         for r in rows:
-            if r.stage in {"discovery","assessment","architecture","metadata","engineering","validate","deploy"}:
-                try: out[r.stage]=json.loads(r.content)
+            if r["stage"] in {"discovery","assessment","architecture","metadata","engineering","validate","deploy"}:
+                try: out[r["stage"]]=json.loads(r["content"])
                 except Exception: pass
     return out
 

@@ -1,7 +1,6 @@
 import json
 import re
-from sqlalchemy import text
-from cinvent.db import engine, get_project, get_evidence, add_artifact, log_ai, get_latest_artifact, artifact_exists, add_approval, latest_approval
+from cinvent.db import get_project, get_evidence, add_artifact, log_ai, get_latest_artifact, artifact_exists, add_approval, latest_approval
 from cinvent.ai.gateway import json_complete
 from cinvent.ai.prompts import system
 from cinvent.config import settings
