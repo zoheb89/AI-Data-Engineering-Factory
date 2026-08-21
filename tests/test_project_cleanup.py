@@ -20,3 +20,29 @@ def test_explicit_blank_project_is_not_deleted(tmp_path):
     ids = {p["id"] for p in db.list_projects()}
     assert system in ids
     assert user in ids
+
+
+def test_untitled_evidence_project_is_renamed_not_deleted(tmp_path):
+    db = ProjectStore(tmp_path / "cinvent.db")
+    pid = db.create_project("Untitled Customer Project", "Healthcare", "Modernize HMS", source="system")
+    db.save_artifact(pid, "intake_pack", "Intake Pack", "json", "{}")
+    db.migrate_untitled_projects()
+    p = db.get_project(pid)
+    assert p["name"] == "Healthcare Modernization Project"
+    assert p["id"] == pid
+
+
+def test_empty_startup_does_not_require_untitled_project(tmp_path):
+    db = ProjectStore(tmp_path / "cinvent.db")
+    assert db.list_projects() == []
+    db.migrate_untitled_projects()
+    assert db.list_projects() == []
+
+
+def test_user_untitled_placeholder_is_renamed(tmp_path):
+    db = ProjectStore(tmp_path / "cinvent.db")
+    pid = db.create_project("Untitled Customer Project", "Unknown", "", source="user")
+    db.migrate_untitled_projects()
+    p = db.get_project(pid)
+    assert p["name"] != "Untitled Customer Project"
+    assert p["name"].startswith("New Customer Project")

@@ -83,6 +83,73 @@ class ProjectStore:
             c.execute("UPDATE projects SET source='system' WHERE id=?", (keep["id"],))
             return keep["id"]
 
+
+    def migrate_untitled_projects(self):
+        """Make the project list customer-facing without deleting evidence.
+
+        C INVENT never creates a project on startup. Any POC-era "Untitled
+        Customer Project" is renamed in place. Evidence-bearing projects are
+        retained with their existing id/history; empty placeholders are retained
+        only when they are explicitly user-created. Legacy/system duplicates that
+        are truly empty are consolidated to one named system starter.
+        """
+        with self.conn() as c:
+            rows = [dict(r) for r in c.execute(
+                "SELECT * FROM projects WHERE name IS NULL OR TRIM(name)='' OR name='Untitled Customer Project' "
+                "ORDER BY updated_at DESC"
+            )]
+            if not rows:
+                return
+
+            empty_legacy = []
+            for p in rows:
+                pid = p["id"]
+                has_data = any([
+                    c.execute("SELECT 1 FROM documents WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM artifacts WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM runs WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM approvals WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM audit WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    bool((p.get("description") or "").strip()),
+                ])
+                if not has_data and p.get("source") in ("legacy", "system"):
+                    empty_legacy.append(p)
+
+            keep = empty_legacy[0] if empty_legacy else None
+            for p in empty_legacy[1:]:
+                c.execute("DELETE FROM projects WHERE id=?", (p["id"],))
+            if keep:
+                c.execute(
+                    "UPDATE projects SET name='New Customer Project', source='system', updated_at=? WHERE id=?",
+                    (self.now(), keep["id"]),
+                )
+
+            used_names = {r[0] for r in c.execute("SELECT name FROM projects WHERE name IS NOT NULL").fetchall()}
+            for p in rows:
+                pid = p["id"]
+                exists = c.execute("SELECT 1 FROM projects WHERE id=?", (pid,)).fetchone()
+                if not exists:
+                    continue
+                current = c.execute("SELECT name,domain,description FROM projects WHERE id=?", (pid,)).fetchone()
+                if current and current[0] not in (None, "", "Untitled Customer Project"):
+                    continue
+                domain = (current[1] or p.get("domain") or "").strip()
+                description = (current[2] or p.get("description") or "").strip()
+                has_data = any([
+                    c.execute("SELECT 1 FROM documents WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM artifacts WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM runs WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM approvals WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM audit WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    bool(description),
+                ])
+                base = f"{domain} Modernization Project" if domain and domain.lower() != "unknown" else ("Customer Modernization Project" if has_data else "New Customer Project")
+                name = base
+                if name in used_names:
+                    name = f"{base} · {pid[:8]}"
+                used_names.add(name)
+                c.execute("UPDATE projects SET name=?, updated_at=? WHERE id=?", (name, self.now(), pid))
+
     def list_projects(self):
         with self.conn() as c:
             return [dict(x) for x in c.execute("SELECT * FROM projects ORDER BY updated_at DESC")]

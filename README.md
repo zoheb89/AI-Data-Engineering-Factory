@@ -74,7 +74,7 @@ The Capgemini POC now keeps agent requests compact, uses a 1,200-token default o
 
 ## Governed delivery lifecycle
 
-C INVENT 0.1.8 enforces the delivery sequence below. Intake does not perform platform capability checks.
+C INVENT 0.1.13 enforces the delivery sequence below. Intake does not perform platform capability checks.
 
 **Intake → Discovery → Environment Assessment → Assessment → Architecture → Metadata → Engineering → Validate → Deploy → Operate**
 
@@ -91,3 +91,20 @@ C INVENT 0.1.8 enforces the delivery sequence below. Intake does not perform pla
 Stage freshness is dependency-aware: if an upstream stage is regenerated, downstream stages are no longer considered current until regenerated.
 
 The Capgemini adapter remains the POC AI provider and is isolated from the delivery control plane.
+
+
+## Control Plane vs Workspace
+
+C INVENT deliberately separates control from execution.
+
+**Control Plane** = lifecycle state, evidence lineage, readiness gates, approvals, audit and next-action recommendation. It should tell a delivery lead *what is true, what is missing, and what must happen next*.
+
+**Delivery Workspace** = the place where the stage is actually performed and its artifacts are generated. Intake captures evidence; Discovery interprets it; Environment Assessment verifies applicable platform capabilities; Assessment evaluates readiness; Architecture designs the target; Metadata and Engineering produce implementation assets.
+
+**Platform Workspace** = controlled Databricks/Lakebase/AI-BI execution and consumption capabilities.
+
+The Control Plane may open the relevant Workspace, but it does not duplicate the stage's execution controls. This prevents the Command Center from becoming a second application that performs every task.
+
+## Project creation
+
+Projects are never auto-created on startup. **New Customer Project** requires a customer/project name, domain and optional business intent. Legacy `Untitled Customer Project` records are renamed in place without deleting their evidence or history.

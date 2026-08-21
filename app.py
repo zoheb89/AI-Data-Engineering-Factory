@@ -120,52 +120,106 @@ def gate_message(text):
     st.warning(text)
 
 
-# Workspace bootstrap: clean up only legacy/system-created blank projects.
-# Explicitly created customer projects are never deleted by startup cleanup.
-store.ensure_single_clean_workspace()
+# Workspace/project bootstrap.
+# C INVENT never creates an "Untitled Customer Project" automatically.
+# Existing legacy placeholders are migrated to a neutral, editable project name.
+store.migrate_untitled_projects()
 projects = store.list_projects()
-if not projects:
-    st.session_state.project_id = store.create_project(
-        "Untitled Customer Project", "Unknown", "", source="system"
-    )
-    projects = store.list_projects()
-if "project_id" not in st.session_state or not store.get_project(st.session_state.project_id):
-    st.session_state.project_id = projects[0]["id"]
 
-project = store.get_project(st.session_state.project_id)
+if "project_id" not in st.session_state or not any(p["id"] == st.session_state.project_id for p in projects):
+    st.session_state.project_id = projects[0]["id"] if projects else None
 
 with st.sidebar:
     st.markdown("# 🧠 C INVENT")
     st.caption(f"Enterprise AI Delivery Factory · {settings.app_version}")
-    if st.button("＋ New Project", use_container_width=True):
-        st.session_state.project_id = store.create_project(
-            "Untitled Customer Project", "Unknown", "", source="user"
-        )
-        st.rerun()
-    if st.button("↻ Start Fresh", use_container_width=True):
+
+    if st.button("＋ New Customer Project", use_container_width=True):
+        st.session_state.show_new_project = True
+
+    if st.session_state.get("show_new_project"):
+        st.markdown("#### Create customer project")
+        with st.form("new_customer_project", clear_on_submit=True):
+            new_name = st.text_input("Customer / project name", placeholder="e.g. Weqayah Medical Centre")
+            new_domain = st.text_input("Business domain", placeholder="e.g. Healthcare")
+            new_intent = st.text_area("Business intent", height=110, placeholder="What does the customer want to achieve?")
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                create = st.form_submit_button("Create", type="primary", use_container_width=True)
+            with fc2:
+                cancel = st.form_submit_button("Cancel", use_container_width=True)
+            if cancel:
+                st.session_state.show_new_project = False
+                st.rerun()
+            if create:
+                if not new_name.strip():
+                    st.warning("Customer / project name is required.")
+                else:
+                    st.session_state.project_id = store.create_project(
+                        new_name.strip(), new_domain.strip() or "Unknown", new_intent.strip(), source="user"
+                    )
+                    st.session_state.show_new_project = False
+                    st.rerun()
+
+    if st.button("↻ Reset POC Workspace", use_container_width=True):
         st.session_state.confirm_reset = True
     if st.session_state.get("confirm_reset"):
         st.warning("This removes all local POC projects, documents, artifacts, runs, approvals and audit records.")
         if st.checkbox("I understand and want to reset", key="confirm_reset_checkbox"):
-            if st.button("Reset Workspace", type="primary", use_container_width=True):
+            if st.button("Reset All POC Data", type="primary", use_container_width=True):
                 store.reset_workspace()
                 st.session_state.pop("confirm_reset", None)
                 st.session_state.pop("confirm_reset_checkbox", None)
-                st.session_state.project_id = store.create_project(
-            "Untitled Customer Project", "Unknown", "", source="user"
-        )
+                st.session_state.project_id = None
                 st.rerun()
+
     projects = store.list_projects()
-    labels = {p["id"]: f'{p["name"]} · {p["id"][:8]}' for p in projects}
-    selected = st.selectbox("Project", list(labels), format_func=lambda x: labels[x], index=list(labels).index(st.session_state.project_id))
-    if selected != st.session_state.project_id:
-        st.session_state.project_id = selected
-        st.rerun()
-    page = st.radio("Workspace", [
-        "Command Center", "Intake & Documents", "AI Discovery", "Environment Assessment", "Assessment",
-        "Solution Blueprint", "Metadata", "Engineering Factory", "Databricks Factory", "Lakebase & Apps",
-        "AI/BI & Genie", "QA & Traceability", "AI Lab", "AI Connectivity", "Audit"
-    ])
+    if projects:
+        labels = {p["id"]: f'{p["name"]} · {p["id"][:8]}' for p in projects}
+        current = st.session_state.project_id if st.session_state.project_id in labels else next(iter(labels))
+        selected = st.selectbox("Customer Project", list(labels), format_func=lambda x: labels[x], index=list(labels).index(current))
+        if selected != st.session_state.project_id:
+            st.session_state.project_id = selected
+            st.rerun()
+
+        st.divider()
+        if "active_page" not in st.session_state:
+            st.session_state.active_page = "Command Center"
+
+        def nav_button(label, target):
+            if st.button(label, key=f"nav_{target}", use_container_width=True):
+                st.session_state.active_page = target
+                st.rerun()
+
+        st.markdown("**CONTROL PLANE**")
+        st.caption("Governance, gates, approvals, evidence and execution control")
+        nav_button("⌂ Command Center", "Command Center")
+        nav_button("✓ QA & Traceability", "QA & Traceability")
+        nav_button("▣ Audit", "Audit")
+        nav_button("⚙ AI Connectivity", "AI Connectivity")
+
+        st.markdown("**DELIVERY WORKSPACE**")
+        st.caption("The workbench where each delivery stage is performed")
+        nav_button("1 · Intake & Documents", "Intake & Documents")
+        nav_button("2 · AI Discovery", "AI Discovery")
+        nav_button("3 · Environment Assessment", "Environment Assessment")
+        nav_button("4 · Current-State Assessment", "Assessment")
+        nav_button("5 · Solution Blueprint", "Solution Blueprint")
+        nav_button("6 · Metadata", "Metadata")
+        nav_button("7 · Engineering Factory", "Engineering Factory")
+
+        st.markdown("**PLATFORM WORKSPACE**")
+        st.caption("Target-platform implementation and consumption")
+        nav_button("Databricks Factory", "Databricks Factory")
+        nav_button("Lakebase & Apps", "Lakebase & Apps")
+        nav_button("AI/BI & Genie", "AI/BI & Genie")
+        nav_button("AI Lab", "AI Lab")
+        page = st.session_state.active_page
+    else:
+        page = "Command Center"
+        st.info("No customer project exists yet. Create a named customer project to begin.")
+
+if not projects:
+    st.stop()
 
 project = store.get_project(st.session_state.project_id)
 s = state(project["id"])
@@ -181,134 +235,129 @@ if page == "Command Center":
     render_stepper(s)
 
     metrics = [
-        ("Documents", store.count_documents(project["id"])),
-        ("AI Runs", store.count_runs(project["id"])),
-        ("Artifacts", store.count_artifacts(project["id"])),
-        ("Approvals", store.count_approvals(project["id"])),
-        ("AI Provider", "Configured" if settings.llm_api_key and settings.llm_base_url else "Not configured"),
-        ("Databricks", "Connected" if db.configured else "Not configured"),
+        ("Documents", str(store.count_documents(project["id"])), "Customer evidence"),
+        ("AI Runs", str(store.count_runs(project["id"])), "AI / assessment executions"),
+        ("Artifacts", str(store.count_artifacts(project["id"])), "Governed delivery outputs"),
+        ("Approvals", str(store.count_approvals(project["id"])), "Human control decisions"),
+        ("AI Provider", "Configured" if settings.llm_api_key and settings.llm_base_url else "Not configured", "Capgemini gateway"),
+        ("Databricks", "Connected" if db.configured else "Not configured", "Platform connectivity"),
     ]
-    cols = st.columns(len(metrics))
-    for col, (label, value) in zip(cols, metrics):
-        col.metric(label, value)
+    metric_cols = st.columns(3)
+    for i, (label, value, hint) in enumerate(metrics):
+        with metric_cols[i % 3]:
+            st.markdown(
+                f'<div class="metric-card"><div class="metric-label">{label}</div>'
+                f'<div class="metric-value">{value}</div><div class="metric-hint">{hint}</div></div>',
+                unsafe_allow_html=True,
+            )
 
     st.divider()
-    st.subheader("Business intent")
-    current_intent = project.get("description") or ""
-    if current_intent.startswith("Capgemini gateway timed out") or current_intent.startswith("Capgemini HTTP "):
-        st.warning("The stored business-intent field contains a provider error from an earlier POC run. C INVENT will not treat provider errors as customer intent.")
-        intake_artifact = store.latest_artifact(project["id"], "intake_pack")
-        if intake_artifact:
-            try:
-                recovered = json.loads(intake_artifact.get("content", "{}"))
-                current_intent = recovered.get("customer_intent") or ""
-                if current_intent:
-                    store.update_project(project["id"], description=current_intent)
-                    project = store.get_project(project["id"])
-            except Exception:
-                current_intent = ""
-    prompt = st.text_area("Customer requirement", value=current_intent, height=150, label_visibility="collapsed")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("Save Customer Intent", type="primary", use_container_width=True):
-            store.update_project(project["id"], description=prompt.strip())
-            st.success("Customer intent saved. Create the Intake Pack to start governed delivery.")
-            st.rerun()
-    with c2:
-        if not s["intake"]:
-            if st.button("Create Intake Pack", use_container_width=True):
-                if not prompt.strip():
-                    st.warning("Capture the customer intent first.")
-                else:
-                    store.update_project(project["id"], description=prompt.strip())
-                    orch.capture_intake(project["id"])
-                    st.success("Intake Pack created.")
-                    st.rerun()
-        elif not s["discovery"]:
-            disabled = not (settings.llm_api_key and settings.llm_base_url)
-            if st.button("Run Discovery", type="primary", use_container_width=True, disabled=disabled):
-                with st.spinner("Running Discovery..."):
-                    result = orch.run_discovery(project["id"], project.get("description") or "")
-                if isinstance(result, dict) and result.get("error"):
-                    st.error(result["error"])
-                else:
-                    st.success("Discovery completed.")
-                    st.rerun()
-        elif not s["environment"]:
-            if st.button("Run Environment Assessment", type="primary", use_container_width=True):
-                with st.spinner("Assessing customer environment and applicable platform capabilities..."):
-                    result = orch.run_environment_assessment(project["id"], db.capability_report())
-                if isinstance(result, dict) and result.get("error"):
-                    st.error(result["error"])
-                else:
-                    st.success("Environment Assessment completed.")
-                    st.rerun()
-        elif not s["assessment"]:
-            st.markdown("**Assessment scope**")
-            st.caption("C INVENT is assessing delivery readiness — not simply whether Databricks is connected.")
-            ac1, ac2, ac3, ac4 = st.columns(4)
-            ac1.markdown("**Business / Use Case**\nObjectives · processes · actors · requirements")
-            ac2.markdown("**Data / Sources**\nCurrent systems · sources · inventory gaps · migration evidence")
-            ac3.markdown("**Platform / Environment**\nTarget platform · access · verified capabilities · constraints")
-            ac4.markdown("**Governance / Delivery**\nSecurity · privacy · SLAs · RPO/RTO · dependencies")
-            st.caption("Evidence sources: Customer Intent + Discovery + Environment Assessment. The assessment is deterministic and does not require a Capgemini model call.")
-            if st.button("Run Current-State Assessment", type="primary", use_container_width=True):
-                with st.spinner("Building evidence-based Current-State Assessment..."):
-                    result = orch.run_assessment(project["id"])
-                if isinstance(result, dict) and result.get("error"):
-                    st.error(result["error"])
-                else:
-                    st.success("Current-State Assessment completed from Discovery + Environment evidence. No LLM call is required for this gate.")
-                    st.rerun()
-        elif not s["architecture"]:
-            if st.button("Generate Architecture", type="primary", use_container_width=True):
-                with st.spinner("Generating target-state architecture..."):
-                    result = orch.run_blueprint(project["id"])
-                if isinstance(result, dict) and result.get("error"):
-                    st.error(result["error"])
-                else:
-                    st.success("Architecture generated. Human approval is now required.")
-                    st.rerun()
-        elif not s["architecture_approved"]:
-            st.warning("Architecture is ready for human approval. Open Solution Blueprint.")
-        elif not s["metadata"]:
-            if st.button("Generate Metadata", type="primary", use_container_width=True):
-                with st.spinner("Generating canonical metadata..."):
-                    result = orch.run_metadata(project["id"])
-                if isinstance(result, dict) and result.get("error"):
-                    st.error(result["error"])
-                else:
-                    st.success("Metadata generated.")
-                    st.rerun()
-        elif not s["engineering"]:
-            if st.button("Generate Engineering", type="primary", use_container_width=True):
-                with st.spinner("Generating metadata-driven engineering..."):
-                    result = orch.run_engineering(project["id"])
-                if isinstance(result, dict) and result.get("error"):
-                    st.error(result["error"])
-                else:
-                    st.success("Engineering generated.")
-                    st.rerun()
-        elif not s["validate"]:
-            if st.button("Run Validation", type="primary", use_container_width=True):
-                with st.spinner("Running validation and traceability checks..."):
-                    result = orch.run_qa(project["id"])
-                if isinstance(result, dict) and result.get("error"):
-                    st.error(result["error"])
-                else:
-                    st.success("Validation completed.")
-                    st.rerun()
-        elif not s["deploy"]:
-            st.warning("Validation is complete. Deployment requires an explicit deployment approval.")
+    st.subheader("Delivery evidence & decision trail")
+    st.caption("Every lifecycle decision is tied to a persisted artifact/run, its evidence source, and the gate it controls. C INVENT does not treat an AI response as proof by itself.")
+
+    evidence_rows = [
+        ("Intake", "Customer intent + source documents", "intake_pack", "intake"),
+        ("Discovery", "Structured business / system discovery", "discovery", "discovery"),
+        ("Environment Assessment", "Verified environment + applicable capabilities", "environment_assessment", "environment"),
+        ("Current-State Assessment", "Delivery readiness across 4 dimensions", "assessment", "assessment"),
+        ("Architecture", "Target-state design + decisions", "blueprint", "architecture"),
+    ]
+    ev_cols = st.columns([1.15, 2.35, 1.15, 1.55])
+    for c, h in zip(ev_cols, ["Stage", "What it proves", "Status", "Evidence"]):
+        c.markdown(f"**{h}**")
+    for label, proves, kind, key in evidence_rows:
+        run = s["runs"].get(key) if key in s.get("runs", {}) else None
+        if kind == "intake_pack":
+            exists = s["intake"]
+            artifact = store.latest_artifact(project["id"], kind) if exists else None
+            status = "✓ Complete" if exists else "○ Pending"
+            evidence = artifact.get("name", "Intake Pack") if artifact else "Not created"
         else:
-            st.success("Delivery is deployment-approved. Operate the delivered solution from the Databricks/operations controls.")
-    with c3:
-        st.markdown("**Governance**")
-        st.caption("Customer facts → structured artifacts → approvals → controlled execution")
-        if not settings.llm_api_key or not settings.llm_base_url:
-            st.warning("AI provider is not configured. Configure Capgemini under AI Connectivity for AI-assisted stages. Evidence-based Assessment does not require the LLM.")
-        if not db.configured:
-            st.caption("Databricks is not connected. Platform-specific capability checks will report this when applicable.")
+            exists = bool(run)
+            status = "✓ Complete" if exists else "○ Pending"
+            evidence = kind if run else "Not generated"
+        r = st.columns([1.15, 2.35, 1.15, 1.55])
+        r[0].write(label)
+        r[1].write(proves)
+        r[2].write(status)
+        r[3].write(evidence)
+
+    # Once Assessment or Architecture exists, expose the actual decision—not just the next button.
+    if s["runs"].get("assessment"):
+        assessment_out = s["runs"]["assessment"].get("output") or {}
+        st.markdown("#### Current-State Assessment decision")
+        a1, a2, a3 = st.columns([1.2, 2.8, 2])
+        a1.metric("Decision", assessment_out.get("decision", "UNKNOWN"))
+        a2.write(assessment_out.get("summary", "No assessment summary available."))
+        a3.write("**Gate evidence:** Discovery + Environment Assessment")
+        with st.expander("See assessment evidence, gaps and traceability", expanded=False):
+            dims = assessment_out.get("dimensions", {})
+            for k, title in [("business_use_case","Business / Use Case"),("data_and_sources","Data / Sources"),("platform_and_environment","Platform / Environment"),("governance_and_delivery","Governance / Delivery")]:
+                d = dims.get(k, {})
+                st.markdown(f"**{title} — {d.get('status','UNKNOWN')}**")
+                st.caption(d.get("what_is_assessed", ""))
+                for item in d.get("evidence", [])[:8]: st.write("• " + str(item))
+                for item in d.get("open_items", [])[:8]: st.write("⚠ " + str(item))
+            st.json(assessment_out.get("traceability", {}))
+
+    if s["runs"].get("architecture"):
+        arch = s["runs"]["architecture"].get("output") or {}
+        st.markdown("#### Architecture decision trail")
+        st.caption("Architecture is generated from the approved/current evidence chain. Proposed technology choices must remain distinguishable from verified customer facts.")
+        ac = st.columns(2)
+        with ac[0]:
+            st.markdown("**Target architecture**")
+            st.write(arch.get("summary") or arch.get("target_architecture") or "No architecture summary available.")
+            st.markdown("**Data flow**")
+            st.write(arch.get("data_flow", "Not provided"))
+        with ac[1]:
+            st.markdown("**Decisions**")
+            for x in arch.get("decisions", [])[:8]: st.write("→ " + str(x))
+            st.markdown("**Open questions / risks**")
+            for x in (arch.get("open_questions", []) + arch.get("risks", []))[:10]: st.write("⚠ " + str(x))
+        st.caption("Architecture source chain: Discovery → Environment Assessment → Current-State Assessment → Architecture generation")
+
+    st.divider()
+    st.subheader("Control-plane action")
+    action_map = {
+        "Create Intake Pack": ("Intake & Documents", "Open Intake Workspace"),
+        "Run Discovery": ("AI Discovery", "Open Discovery Workspace"),
+        "Run Environment Assessment": ("Environment Assessment", "Open Environment Assessment"),
+        "Run Current-State Assessment": ("Assessment", "Open Assessment Workspace"),
+        "Generate Architecture": ("Solution Blueprint", "Open Architecture Workspace"),
+        "Approve Architecture": ("Solution Blueprint", "Open Architecture Approval"),
+        "Generate Metadata": ("Metadata", "Open Metadata Workspace"),
+        "Generate Engineering": ("Engineering Factory", "Open Engineering Workspace"),
+        "Run Validation": ("QA & Traceability", "Open Validation / QA"),
+        "Approve Deployment": ("Databricks Factory", "Open Deployment Controls"),
+        "Start Operations": ("Databricks Factory", "Open Operations Controls"),
+    }
+    target, action_label = action_map.get(next_action(s), ("Command Center", "Review Delivery Status"))
+    st.caption("The Control Plane coordinates lifecycle state, evidence, gates and approvals. It does not perform delivery work itself. Open the relevant Workspace to execute the next stage.")
+    ac1, ac2 = st.columns([2.2, 1])
+    with ac1:
+        st.markdown(f"**Recommended next action:** {next_action(s)}")
+        st.write("The selected workspace owns the execution and artifact generation for this stage.")
+    with ac2:
+        if st.button(action_label, type="primary", use_container_width=True):
+            st.session_state.active_page = target
+            st.rerun()
+
+    st.markdown("#### Customer intent")
+    intent = project.get("description") or "No customer intent captured yet."
+    if intent.startswith("Capgemini gateway timed out") or intent.startswith("Capgemini HTTP "):
+        st.warning("A provider error was previously stored as project description. It is not considered customer intent; open Intake & Documents to replace it with customer-provided intent.")
+    else:
+        st.info(intent)
+
+    st.markdown("#### Control Plane vs Workspace")
+    cp1, cp2 = st.columns(2)
+    with cp1:
+        st.markdown("**CONTROL PLANE**")
+        st.write("Owns lifecycle state, evidence lineage, gate decisions, approvals, audit, policy and the recommendation of what happens next.")
+    with cp2:
+        st.markdown("**DELIVERY WORKSPACE**")
+        st.write("Performs the actual stage work: capture documents, run discovery, assess the environment, build architecture, generate metadata and engineering, then validate and deploy.")
 
 elif page == "Intake & Documents":
     st.subheader("RFI / RFP / RFQ Intake")
