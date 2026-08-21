@@ -29,6 +29,6 @@ def test_blueprint_is_compact_and_low_token():
     out=o.run_blueprint("p1")
     assert out["summary"]=="ok"
     assert len(llm.text) < 9000
-    assert llm.kw["maxTokens"] == 650
+    assert llm.kw["maxTokens"] == 420
     assert llm.kw["temperature"] == 0.0
     assert llm.kw["streaming"] is False

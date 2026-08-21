@@ -113,41 +113,97 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
         return self._run(pid,"assessment",prompts.ASSESSMENT,ctx,evidence_limit=8000,use_documents=True,max_tokens=1200)
 
     def run_blueprint(self,pid):
-        # Blueprint is deliberately a compact second-stage call. Discovery already
-        # distilled the customer evidence, so sending the full discovery/assessment
-        # payload again creates unnecessary latency and can trigger the Capgemini
-        # gateway 504 timeout.
+        """Generate a compact blueprint from the persisted Discovery result.
+
+        Blueprint intentionally bypasses the generic _run() wrapper because that
+        wrapper adds the whole project object and can make Capgemini requests much
+        larger than necessary. The verified Capgemini endpoint is sensitive to
+        request size/latency, so Blueprint is a small second-stage call.
+        """
         discovery = self.store.latest_run(pid, "discovery")
         assessment = self.store.latest_run(pid, "assessment")
+        if not discovery or not isinstance(discovery.get("output"), dict):
+            return {"error": "Blueprint requires a successful Discovery result."}
 
-        def compact(obj, limit):
-            if not obj:
+        def pick(obj, keys):
+            if not obj or not isinstance(obj.get("output"), dict):
                 return None
-            return json.loads(json.dumps(obj.get("output"), ensure_ascii=False))
+            src = obj["output"]
+            return {k: src[k] for k in keys if k in src}
 
-        d = compact(discovery, 7000)
-        a = compact(assessment, 5000)
-        prior_obj = {"discovery": d, "assessment": a}
-        prior = json.dumps(prior_obj, ensure_ascii=False, separators=(",", ":"))[:7000]
+        # Keep only fields that materially influence architecture. This avoids
+        # repeatedly sending large discovery documents to the LLM.
+        d = pick(discovery, [
+            "summary", "domain", "objectives", "processes", "systems",
+            "sources", "requirements", "assumptions", "unknowns"
+        ]) or {}
+        a = pick(assessment, [
+            "summary", "current_state", "maturity", "complexity", "risks",
+            "dependencies", "recommendations", "unknowns"
+        ]) if assessment else None
 
-        instructions = prompts.BLUEPRINT + """
-Blueprint response must be concise and JSON-only. Use the Discovery/Assessment
-outputs as the authoritative current evidence. Do not restate the entire discovery.
-Return only: summary, target_architecture, data_flow, security_governance,
-environments, delivery_phases, risks, decisions, and open_questions.
-Keep arrays short and actionable. Do not invent technologies that are not supported
-by the evidence; mark proposed choices as recommendations/assumptions.
-"""
+        prior = json.dumps({"discovery": d, "assessment": a},
+                           ensure_ascii=False, separators=(",", ":"))[:4500]
 
-        return self._run(
-            pid,
-            "blueprint",
-            instructions,
-            prior,
-            evidence_limit=0,
-            use_documents=False,
-            max_tokens=650,
-        )
+        system = """You are the C INVENT Solution/Enterprise Architect.
+Create a concise target-state blueprint from the supplied Discovery/Assessment only.
+Do not invent facts. Proposed technology choices must be labelled as recommendations
+or assumptions. Return valid JSON only. Keep every array to at most 4 items.
+Required keys: summary, target_architecture, data_flow, security_governance,
+environments, delivery_phases, risks, decisions, open_questions."""
+        user = """Create the target solution blueprint for this customer engagement.
+Use the following structured evidence only:
+
+""" + prior
+
+        try:
+            out = self.llm.invoke_json(
+                user,
+                system,
+                extra_params={
+                    "maxTokens": 420,
+                    "temperature": 0.0,
+                    "streaming": False,
+                    "topP": 0.9,
+                },
+            )
+            if isinstance(out, dict) and out.get("error") and len(out) == 1:
+                raise RuntimeError(out["error"])
+            self.store.save_run(pid, "blueprint", "success", system, out)
+            self.store.add_audit(pid, "llm:blueprint", "success", json.dumps(out)[:4000])
+            return out
+        except Exception as e:
+            # A final ultra-compact retry is deliberately limited to Discovery's
+            # essentials. This is preferable to resending the full customer context.
+            try:
+                fallback = json.dumps({
+                    "summary": d.get("summary"),
+                    "domain": d.get("domain"),
+                    "objectives": d.get("objectives", [])[:3],
+                    "requirements": d.get("requirements", [])[:3],
+                    "systems": d.get("systems", [])[:3],
+                    "unknowns": d.get("unknowns", [])[:3],
+                }, ensure_ascii=False, separators=(",", ":"))[:2200]
+                out = self.llm.invoke_json(
+                    "Return a minimal enterprise blueprint as JSON for this evidence:\n" + fallback,
+                    system,
+                    extra_params={
+                        "maxTokens": 260,
+                        "temperature": 0.0,
+                        "streaming": False,
+                        "topP": 0.9,
+                    },
+                )
+                if isinstance(out, dict) and not (out.get("error") and len(out) == 1):
+                    self.store.save_run(pid, "blueprint", "success", system, out)
+                    self.store.add_audit(pid, "llm:blueprint", "success", json.dumps(out)[:4000])
+                    return out
+            except Exception as fallback_error:
+                e = fallback_error
+            out = {"error": str(e)}
+            self.store.save_run(pid, "blueprint", "failed", system, out)
+            self.store.add_audit(pid, "llm:blueprint", "failed", str(e))
+            return out
 
     def run_metadata(self,pid):
         discovery=self.store.latest_run(pid,"discovery")

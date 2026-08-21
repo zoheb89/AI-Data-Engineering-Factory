@@ -76,9 +76,9 @@ if page == "Command Center":
                     else:
                         blueprint = orch.run_blueprint(project["id"])
                         if isinstance(blueprint, dict) and blueprint.get("error"):
-                            st.warning("Discovery succeeded, but Blueprint failed.")
+                            st.error("Discovery succeeded, but Blueprint failed. Review the Blueprint error and retry.")
                         else:
-                            st.success("Discovery and blueprint generated.")
+                            st.success("Discovery and Blueprint generated successfully.")
                         st.json({"discovery": result, "blueprint": blueprint})
             else:
                 st.warning("Enter a requirement.")
