@@ -42,7 +42,7 @@ with st.sidebar:
         "Command Center", "Intake & Documents", "AI Discovery", "Assessment",
         "Solution Blueprint", "Metadata", "Engineering Factory",
         "Databricks Factory", "Lakebase & Apps", "AI/BI & Genie",
-        "QA & Traceability", "AI Lab", "Audit"
+        "QA & Traceability", "AI Lab", "AI Connectivity", "Audit"
     ])
 
 st.markdown(
@@ -220,6 +220,24 @@ elif page == "AI Lab":
     if st.button("Invoke GPT-5.1", type="primary"):
         with st.spinner("Calling Capgemini..."):
             st.json(orch.llm_test(text, system))
+
+elif page == "AI Connectivity":
+    st.subheader("C INVENT → Capgemini AI Connectivity")
+    st.write("Use this page before Discovery/Blueprint to validate the API contract.")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Model", settings.llm_model)
+        st.metric("Provider", settings.llm_provider)
+        st.metric("Authentication Header", settings.llm_auth_header)
+    with c2:
+        st.metric("API Key", "Configured" if settings.llm_api_key else "MISSING")
+        st.metric("Workspace ID", "Configured" if settings.capgemini_workspace_id else "MISSING")
+        st.metric("Auth Scheme", settings.llm_auth_scheme)
+    st.code(settings.llm_base_url, language="text")
+    if st.button("Test Capgemini Connection", type="primary"):
+        with st.spinner("Testing Capgemini GPT-5.1..."):
+            result = orch.llm_test("Reply with exactly: C INVENT TEST SUCCESS", "You are a connectivity test assistant.")
+            st.json(result)
 
 elif page == "Audit":
     st.subheader("Audit Log")
