@@ -107,9 +107,71 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
             self.store.add_audit(pid,"llm:discovery","failed",str(e))
             return out
 
+    def run_environment_assessment(self,pid):
+        """Assess the customer's stated environment first, then optionally enrich with live Databricks access.
+
+        Intake/Discovery remain platform-neutral. Live capability information is collected only here,
+        after the customer environment has been identified as relevant.
+        """
+        discovery = self.store.latest_run(pid, "discovery")
+        if not discovery:
+            return {"error": "Environment Assessment requires a successful Discovery result first."}
+        p = self.store.get_project(pid)
+        declared_text = json.dumps({
+            "project": {"name": p.get("name"), "domain": p.get("domain"), "description": p.get("description")},
+            "discovery": discovery.get("output", {})
+        }, ensure_ascii=False)[:10000]
+        system = """You are the C INVENT Environment Assessment Agent.
+Identify the customer's declared/current platforms, source systems, target platforms, cloud services,
+BI tools, integration technologies, security/access technologies and operational constraints from supplied evidence.
+Do not invent technologies. Separate customer-stated facts from unknowns. Return JSON only with keys:
+summary, current_environment, target_environment, platforms, integrations, security, analytics,
+access_questions, unknowns, capability_checks_required, next_steps."""
+        try:
+            env = self.llm.invoke_json(
+                "Assess this customer environment from the evidence below.\n" + declared_text,
+                system,
+                extra_params={"maxTokens": 800, "temperature": 0.0, "streaming": False, "topP": 0.9},
+            )
+            if isinstance(env, dict) and env.get("error") and len(env) == 1:
+                raise RuntimeError(env["error"])
+            # Only perform live Databricks capability discovery when Databricks is explicitly present
+            # in the discovered/current/target environment.
+            raw = json.dumps(env, ensure_ascii=False).lower()
+            live = None
+            if "databricks" in raw:
+                live = self.store.latest_capability_snapshot(pid)
+                if not live:
+                    from c_invent.databricks.client import DatabricksClient
+                    db = DatabricksClient(self.settings)
+                    report = db.capability_report()
+                    status = "failed" if isinstance(report, dict) and report.get("error") else "success"
+                    self.store.save_capability_snapshot(pid, report, status)
+                    live = self.store.latest_capability_snapshot(pid)
+            result = {"environment": env, "live_capabilities": live.get("report") if live else None,
+                      "capability_scope": "Databricks live capability check performed" if live else "No platform-specific live capability check performed yet"}
+            self.store.save_run(pid, "environment", "success", system, result)
+            self.store.add_audit(pid, "environment_assessment", "success", json.dumps(result)[:4000])
+            return result
+        except Exception as e:
+            out = {"error": str(e)}
+            self.store.save_run(pid, "environment", "failed", system, out)
+            self.store.add_audit(pid, "environment_assessment", "failed", str(e))
+            return out
+
     def run_assessment(self,pid):
         discovery=self.store.latest_run(pid,"discovery")
-        ctx=json.dumps(discovery["output"],ensure_ascii=False)[:10000] if discovery else ""
+        environment=self.store.latest_run(pid,"environment")
+        capability = self.store.latest_capability_snapshot(pid) if hasattr(self.store, "latest_capability_snapshot") else None
+        if not discovery:
+            return {"error": "Assessment requires a successful Discovery result first."}
+        if not environment:
+            return {"error": "Assessment requires a successful Environment Assessment first."}
+        ctx=json.dumps({
+            "discovery": discovery["output"],
+            "environment": environment["output"],
+            "live_capabilities": capability.get("report", {}) if capability else None
+        },ensure_ascii=False)[:12000]
         return self._run(pid,"assessment",prompts.ASSESSMENT,ctx,evidence_limit=8000,use_documents=True,max_tokens=1200)
 
     def run_blueprint(self,pid):
@@ -122,8 +184,16 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
         """
         discovery = self.store.latest_run(pid, "discovery")
         assessment = self.store.latest_run(pid, "assessment")
+        capability = self.store.latest_capability_snapshot(pid) if hasattr(self.store, "latest_capability_snapshot") else {"report": {}}
+        environment = self.store.latest_run(pid, "environment")
+        if not environment and hasattr(self.store, "latest_capability_snapshot"):
+            return {"error": "Blueprint requires a successful Environment Assessment result."}
+        if not environment:
+            environment = {"output": {}}
         if not discovery or not isinstance(discovery.get("output"), dict):
             return {"error": "Blueprint requires a successful Discovery result."}
+        if not assessment or not isinstance(assessment.get("output"), dict):
+            return {"error": "Blueprint requires a successful Assessment result."}
 
         def pick(obj, keys):
             if not obj or not isinstance(obj.get("output"), dict):
@@ -142,8 +212,8 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
             "dependencies", "recommendations", "unknowns"
         ]) if assessment else None
 
-        prior = json.dumps({"discovery": d, "assessment": a},
-                           ensure_ascii=False, separators=(",", ":"))[:4500]
+        prior = json.dumps({"discovery": d, "assessment": a, "environment": environment.get("output", {}), "capability": capability.get("report", {}) if capability else None},
+                           ensure_ascii=False, separators=(",", ":"))[:6000]
 
         system = """You are the C INVENT Solution/Enterprise Architect.
 Create a concise target-state blueprint from the supplied Discovery/Assessment only.
@@ -206,15 +276,30 @@ Use the following structured evidence only:
             return out
 
     def run_metadata(self,pid):
-        discovery=self.store.latest_run(pid,"discovery")
         blueprint=self.store.latest_run(pid,"blueprint")
-        prior=json.dumps({"discovery": discovery["output"] if discovery else None, "blueprint": blueprint["output"] if blueprint else None},ensure_ascii=False)[:14000]
+        discovery=self.store.latest_run(pid,"discovery")
+        capability=self.store.latest_capability_snapshot(pid)
+        if not blueprint:
+            return {"error": "Metadata requires a successful Blueprint result."}
+        if hasattr(self.store, "has_approval") and not self.store.has_approval(pid, "blueprint"):
+            return {"error": "Metadata is blocked until the Blueprint is approved."}
+        prior=json.dumps({
+            "discovery": discovery["output"] if discovery else None,
+            "blueprint": blueprint["output"],
+            "capability": capability.get("report", {}) if capability else None
+        },ensure_ascii=False)[:14000]
         return self._run(pid,"metadata",prompts.METADATA,prior,evidence_limit=8000,use_documents=True,max_tokens=1200)
 
-    def run_qa(self,pid): return self._run(pid,"qa",prompts.QA,evidence_limit=8000,use_documents=False,max_tokens=1200)
+    def run_qa(self,pid):
+        if not self.store.has_successful_run(pid, "engineering"):
+            return {"error": "QA requires a successful Engineering result."}
+        return self._run(pid,"qa",prompts.QA,evidence_limit=8000,use_documents=False,max_tokens=1200)
     def run_application_architecture(self,pid): return self._run(pid,"application",prompts.APP,evidence_limit=5000,use_documents=False,max_tokens=1200)
     def run_bi(self,pid): return self._run(pid,"bi",prompts.BI,evidence_limit=5000,use_documents=False,max_tokens=1200)
-    def run_full_qa(self,pid): return self._run(pid,"full_qa",prompts.FULL_QA,evidence_limit=6000,use_documents=False,max_tokens=1200)
+    def run_full_qa(self,pid):
+        if not self.store.has_successful_run(pid, "engineering"):
+            return {"error": "Full readiness review requires a successful Engineering result."}
+        return self._run(pid,"full_qa",prompts.FULL_QA,evidence_limit=6000,use_documents=False,max_tokens=1200)
 
     def run_engineering(self,pid):
         """Generate a compact metadata-driven engineering plan.
@@ -229,6 +314,10 @@ Use the following structured evidence only:
         discovery = self.store.latest_run(pid, "discovery")
         if not blueprint or not isinstance(blueprint.get("output"), dict):
             return {"error": "Engineering requires a successful Blueprint result."}
+        if hasattr(self.store, "has_approval") and not self.store.has_approval(pid, "blueprint"):
+            return {"error": "Engineering is blocked until the Blueprint is approved."}
+        if not metadata or not isinstance(metadata.get("output"), dict):
+            return {"error": "Engineering requires a successful Metadata result."}
 
         def output(run):
             return run.get("output") if isinstance(run, dict) else None
@@ -236,6 +325,7 @@ Use the following structured evidence only:
         b = output(blueprint) or {}
         m = output(metadata) or {}
         d = output(discovery) or {}
+        capability = self.store.latest_capability_snapshot(pid) if hasattr(self.store, "latest_capability_snapshot") else None
         evidence = {
             "blueprint": {k: b.get(k) for k in (
                 "summary", "target_architecture", "data_flow",
@@ -249,6 +339,7 @@ Use the following structured evidence only:
             "discovery": {k: d.get(k) for k in (
                 "domain", "objectives", "systems", "sources", "requirements"
             ) if k in d},
+            "capability": capability.get("report", {}) if capability else None,
         }
         prior = json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))[:5200]
 
@@ -311,6 +402,8 @@ parameters, testing, code_artifacts, assumptions, open_questions."""
             return out
 
     def run_lakeflow(self,pid):
+        if not self.store.has_successful_run(pid, "engineering"):
+            return {"error": "Lakeflow generation requires a successful Engineering result."}
         instructions=prompts.ENGINEERING+"""
 Focus on Lakeflow. Return pipeline_name, source_pattern, bronze, silver, gold,
 data_quality_expectations, parameters and complete source under pipeline_code.
@@ -327,12 +420,16 @@ Use current Spark Declarative Pipelines syntax where appropriate.
         except Exception as e: return {"error":str(e)}
 
     def create_lakeflow(self,pid,db):
+        if not self.store.has_approval(pid, "deployment"):
+            return {"status": "blocked", "reason": "Deployment approval required"}
         if not self.settings.allow_mutations:
             return {"status":"blocked","reason":"Mutation gate disabled"}
         spec=self.run_lakeflow(pid)
         return db.create_pipeline_from_spec(pid,spec,self.store)
 
     def create_job(self,pid,db):
+        if not self.store.has_approval(pid, "deployment"):
+            return {"status": "blocked", "reason": "Deployment approval required"}
         if not self.settings.allow_mutations:
             return {"status":"blocked","reason":"Mutation gate disabled"}
         name=f"cinvent_{pid[:8]}_etl"
@@ -349,12 +446,16 @@ Use current Spark Declarative Pipelines syntax where appropriate.
         return db.create_job({"name":name,"tasks":tasks}, sources)
 
     def create_lakebase(self,pid,db):
+        if not self.store.has_approval(pid, "deployment"):
+            return {"status": "blocked", "reason": "Deployment approval required"}
         if not self.settings.allow_mutations:
             return {"status":"blocked","reason":"Mutation gate disabled"}
         project_id=f"cinvent-{pid[:8]}"
         return db.create_lakebase_project(project_id,self.store.get_project(pid)["name"])
 
     def create_app(self,pid,db,lakebase_project_id=None):
+        if not self.store.has_approval(pid, "deployment"):
+            return {"status": "blocked", "reason": "Deployment approval required"}
         if not self.settings.allow_mutations:
             return {"status":"blocked","reason":"Mutation gate disabled"}
         project=self.store.get_project(pid)
@@ -383,5 +484,7 @@ Use current Spark Declarative Pipelines syntax where appropriate.
         return db.create_customer_app(app_name,project["name"],source_path,lakebase_project_id)
 
     def run_latest_job(self,pid,db):
+        if not self.store.has_approval(pid, "deployment"):
+            return {"status": "blocked", "reason": "Deployment approval required"}
         jobs=db.list_jobs(prefix=f"cinvent_{pid[:8]}")
         return db.run_job(jobs[0]["job_id"]) if jobs else {"status":"not_found"}

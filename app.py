@@ -13,6 +13,47 @@ store = ProjectStore()
 orch = Orchestrator(settings, store)
 db = DatabricksClient(settings)
 
+STAGES = [
+    ("Intake", "intake"),
+    ("Discovery", "discovery"),
+    ("Environment Assessment", "environment"),
+    ("Assessment", "assessment"),
+    ("Architecture", "blueprint"),
+    ("Metadata", "metadata"),
+    ("Engineering", "engineering"),
+    ("Validate", "full_qa"),
+    ("Deploy", "deploy"),
+    ("Operate", "operate"),
+]
+
+def stage_state(project_id):
+    checks = {
+        "intake": bool(store.get_project(project_id).get("description")) and store.has_artifact(project_id, "intake", "intake_pack.json"),
+        "discovery": store.has_successful_run(project_id, "discovery"),
+        "environment": store.has_successful_run(project_id, "environment"),
+        "assessment": store.has_successful_run(project_id, "assessment"),
+        "blueprint": store.has_successful_run(project_id, "blueprint") and store.has_approval(project_id, "blueprint"),
+        "metadata": store.has_successful_run(project_id, "metadata"),
+        "engineering": store.has_successful_run(project_id, "engineering"),
+        "full_qa": store.has_successful_run(project_id, "full_qa"),
+        "deploy": store.has_approval(project_id, "deployment"),
+        "operate": False,
+    }
+    return checks
+
+def next_action(project_id):
+    checks = stage_state(project_id)
+    for label, key in STAGES:
+        if not checks[key]:
+            return label, key, checks
+    return "Complete", "complete", checks
+
+def run_capability_check(project_id):
+    report = db.capability_report()
+    status = "failed" if isinstance(report, dict) and report.get("error") else "success"
+    store.save_capability_snapshot(project_id, report, status)
+    return report
+
 if "project_id" not in st.session_state:
     st.session_state.project_id = store.create_project(
         "Untitled Customer Project", "Unknown", ""
@@ -55,66 +96,145 @@ st.markdown(
 )
 
 if page == "Command Center":
-    st.subheader("What do you want to build?")
-    prompt = st.text_area(
-        "Business intent",
-        value=project.get("description") or "",
-        placeholder="Example: Modernize a hospital HMS from SQL Server and build automated analytics and an operational application.",
-        height=160,
-        label_visibility="collapsed"
-    )
-    a, b, c = st.columns(3)
-    with a:
-        if st.button("🔎 Analyze & Blueprint", type="primary", use_container_width=True):
-            if prompt.strip():
-                store.update_project(project["id"], description=prompt)
-                with st.spinner("GPT-5.1 is analyzing the engagement..."):
-                    result = orch.run_discovery(project["id"], prompt)
-                    if isinstance(result, dict) and result.get("error"):
-                        st.error("Discovery failed. Blueprint was not started.")
-                        st.json({"discovery": result})
-                    else:
-                        blueprint = orch.run_blueprint(project["id"])
-                        if isinstance(blueprint, dict) and blueprint.get("error"):
-                            st.error("Discovery succeeded, but Blueprint failed. Review the Blueprint error and retry.")
-                        else:
-                            st.success("Discovery and Blueprint generated successfully.")
-                        st.json({"discovery": result, "blueprint": blueprint})
+    st.subheader("Delivery Control")
+    current_label, current_key, checks = next_action(project["id"])
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.markdown(f"### Next recommended action: **{current_label}**")
+        if current_key == "intake":
+            st.info("Capture the customer intent and create the Intake Pack.")
+        elif current_key == "discovery":
+            st.info("Understand the customer's business, current systems, sources, requirements and unknowns.")
+        elif current_key == "environment":
+            st.info("Identify the customer's technology environment first; only then perform relevant live platform capability checks.")
+        elif current_key == "assessment":
+            st.info("Assess complexity, readiness, risks and gaps from Discovery + Environment Assessment.")
+        elif current_key == "blueprint":
+            st.info("Generate the target-state architecture. Blueprint approval is the next gate.")
+        elif current_key == "metadata":
+            st.info("Generate canonical metadata after Blueprint approval.")
+        elif current_key == "engineering":
+            st.info("Generate implementation only from approved Blueprint + Metadata.")
+        elif current_key == "full_qa":
+            st.info("Run end-to-end readiness and traceability checks before deployment.")
+        elif current_key == "deploy":
+            st.info("Deployment remains approval-controlled in the POC.")
+        else:
+            st.success("The governed POC lifecycle is complete.")
+    with c2:
+        st.metric("Documents", store.count_documents(project["id"]))
+        st.metric("AI Runs", store.count_runs(project["id"]))
+        st.metric("Approvals", store.count_approvals(project["id"]))
+
+    st.divider()
+    st.subheader("Lifecycle gates")
+    cols = st.columns(len(STAGES))
+    for col, (label, key) in zip(cols, STAGES):
+        if checks[key]:
+            col.success(f"✓ {label}")
+        elif key == current_key:
+            col.warning(f"▶ {label}")
+        else:
+            col.info(f"○ {label}")
+
+    st.progress(sum(1 for v in checks.values() if v) / len(STAGES))
+
+    if current_key == "intake":
+        prompt = st.text_area(
+            "Business intent",
+            value=project.get("description") or "",
+            placeholder="Example: Modernize a hospital HMS from SQL Server and build automated analytics and an operational application.",
+            height=150
+        )
+        if st.button("Create Intake Pack", type="primary"):
+            if not prompt.strip():
+                st.warning("Enter the customer requirement first.")
             else:
-                st.warning("Enter a requirement.")
-    with b:
-        if st.button("⚙️ Build Engineering Plan", use_container_width=True):
+                store.update_project(project["id"], description=prompt.strip())
+                pack = store.save_intake_pack(project["id"])
+                st.success("Intake Pack created. Next: Discovery.")
+                st.json(pack)
+    elif current_key == "environment":
+        if st.button("Run Environment Assessment", type="primary"):
+            with st.spinner("Identifying customer platforms and checking only relevant live capabilities..."):
+                result = orch.run_environment_assessment(project["id"])
+            if isinstance(result, dict) and result.get("error"):
+                st.error(result["error"])
+            else:
+                st.success("Environment Assessment saved. Next: Assessment.")
+                st.json(result)
+    elif current_key == "discovery":
+        if st.button("Run Discovery", type="primary"):
+            with st.spinner("Analyzing customer evidence..."):
+                result = orch.run_discovery(project["id"], project.get("description") or "")
+            if isinstance(result, dict) and result.get("error"):
+                st.error(result["error"])
+            else:
+                st.success("Discovery Pack generated. Next: Assessment.")
+                st.json(result)
+    elif current_key == "assessment":
+        if st.button("Generate Assessment", type="primary"):
+            with st.spinner("Assessing current state..."):
+                result = orch.run_assessment(project["id"])
+            if isinstance(result, dict) and result.get("error"):
+                st.error(result["error"])
+            else:
+                st.success("Assessment generated. Next: Architecture.")
+                st.json(result)
+    elif current_key == "blueprint":
+        if st.button("Generate Solution Blueprint", type="primary"):
+            with st.spinner("Designing target architecture..."):
+                result = orch.run_blueprint(project["id"])
+            if isinstance(result, dict) and result.get("error"):
+                st.error(result["error"])
+            else:
+                st.success("Blueprint generated. Review it in Solution Blueprint and approve it before Metadata.")
+                st.json(result)
+    elif current_key == "metadata":
+        if st.button("Generate Metadata", type="primary"):
+            with st.spinner("Building canonical metadata..."):
+                result = orch.run_metadata(project["id"])
+            if isinstance(result, dict) and result.get("error"):
+                st.error(result["error"])
+            else:
+                st.success("Metadata generated. Next: Engineering.")
+                st.json(result)
+    elif current_key == "engineering":
+        if st.button("Generate Engineering Plan", type="primary"):
             with st.spinner("Generating metadata-driven engineering..."):
                 result = orch.run_engineering(project["id"])
             if isinstance(result, dict) and result.get("error"):
-                st.error("Engineering plan failed. Review the LLM error and retry.")
+                st.error(result["error"])
             else:
-                st.success("Engineering plan generated successfully.")
-            st.json(result)
-    with c:
-        if st.button("☁ Capability Check", use_container_width=True):
-            st.json(db.capability_report())
+                st.success("Engineering plan generated. Next: Validate.")
+                st.json(result)
+    elif current_key == "full_qa":
+        if st.button("Run Full Readiness Review", type="primary"):
+            with st.spinner("Reviewing end-to-end readiness..."):
+                result = orch.run_full_qa(project["id"])
+            if isinstance(result, dict) and result.get("error"):
+                st.error(result["error"])
+            else:
+                st.success("Validation completed. Deployment approval remains required.")
+                st.json(result)
+    elif current_key == "deploy":
+        st.warning("Deployment is approval-controlled. Use QA & Traceability to review the readiness result, then record deployment approval before mutation actions.")
+    else:
+        st.success("All current POC gates are complete.")
 
     st.divider()
-    metrics = [
-        ("Documents", store.count_documents(project["id"])),
-        ("AI Runs", store.count_runs(project["id"])),
-        ("Artifacts", store.count_artifacts(project["id"])),
-        ("Approvals", store.count_approvals(project["id"])),
-        ("Databricks", "Connected" if db.configured else "Not configured")
-    ]
-    cols = st.columns(len(metrics))
-    for col, (label, value) in zip(cols, metrics):
-        col.metric(label, value)
-
-    steps = ["Intake", "Discover", "Assess", "Architect", "Metadata", "Engineer", "Validate", "Deploy", "Operate"]
     st.subheader("Delivery lifecycle")
-    st.progress(store.lifecycle_progress(project["id"]) / len(steps))
-    st.caption(" → ".join(steps))
+    st.caption(" → ".join(label for label, _ in STAGES))
+    st.caption("Capability checks are environment-specific evidence, not an Intake prerequisite. They are performed only when the discovered environment requires them.")
 
 elif page == "Intake & Documents":
     st.subheader("RFI / RFP / RFQ Intake")
-    st.info("Upload requirements, inventories, data dictionaries, process documents and architecture material.")
+    st.info("Capture customer intent and supporting evidence. Intake is complete when the requirement is saved and an Intake Pack exists.")
+    if project.get("description"):
+        st.success("Customer intent captured.")
+    if st.button("Create / Refresh Intake Pack"):
+        st.json(store.save_intake_pack(project["id"]))
+    st.info("Next governed steps: Discovery → Environment Assessment → Assessment.")
     files = st.file_uploader(
         "Customer material",
         type=["pdf", "docx", "xlsx", "csv", "txt", "md", "json", "yaml", "yml"],
@@ -144,6 +264,12 @@ elif page == "AI Discovery":
 
 elif page == "Assessment":
     st.subheader("Current-State Assessment")
+    if not store.has_successful_run(project["id"], "discovery"):
+        st.warning("Run Discovery before Assessment.")
+        st.stop()
+    if not store.has_successful_run(project["id"], "environment"):
+        st.warning("Run Environment Assessment before Assessment.")
+        st.stop()
     if st.button("Generate Assessment", type="primary"):
         with st.spinner("Assessing current state..."):
             st.json(orch.run_assessment(project["id"]))
@@ -186,14 +312,26 @@ elif page == "Engineering Factory":
 
 elif page == "Databricks Factory":
     st.subheader("Databricks Factory")
-    st.json(db.capability_report())
-    st.caption(f"Mutation gate: {'ENABLED' if settings.allow_mutations else 'DISABLED'}")
+    snapshot = store.latest_capability_snapshot(project["id"])
+    st.json(snapshot.get("report") if snapshot else db.capability_report())
+    st.caption(f"Mutation gate: {'ENABLED' if settings.allow_mutations else 'DISABLED'} · Deployment approval: {'RECORDED' if store.has_approval(project['id'], 'deployment') else 'REQUIRED'}")
+    if not store.has_approval(project["id"], "deployment"):
+        st.warning("Live Databricks mutations are blocked until Deployment Approval is recorded.")
     if st.button("Create Lakeflow Pipeline", type="primary"):
-        st.json(orch.create_lakeflow(project["id"], db))
+        if not store.has_approval(project["id"], "deployment"):
+            st.error("Deployment approval required before mutation.")
+        else:
+            st.json(orch.create_lakeflow(project["id"], db))
     if st.button("Create Lakeflow Job"):
-        st.json(orch.create_job(project["id"], db))
+        if not store.has_approval(project["id"], "deployment"):
+            st.error("Deployment approval required before mutation.")
+        else:
+            st.json(orch.create_job(project["id"], db))
     if st.button("Run Latest C INVENT Job"):
-        st.json(orch.run_latest_job(project["id"], db))
+        if not store.has_approval(project["id"], "deployment"):
+            st.error("Deployment approval required before mutation.")
+        else:
+            st.json(orch.run_latest_job(project["id"], db))
 
 elif page == "Lakebase & Apps":
     st.subheader("Lakebase & Databricks Apps")
@@ -220,8 +358,17 @@ elif page == "QA & Traceability":
     st.subheader("QA & Traceability")
     if st.button("Run Full Readiness Review", type="primary"):
         with st.spinner("Reviewing end-to-end readiness..."):
-            st.json(orch.run_full_qa(project["id"]))
-    st.caption("Requirement → architecture → metadata → engineering → QA → deployment is recorded as an audit trail.")
+            result = orch.run_full_qa(project["id"])
+            st.json(result)
+    qa = store.latest_run(project["id"], "full_qa")
+    if qa:
+        st.divider()
+        st.subheader("Deployment gate")
+        st.write("Review the latest readiness result before recording deployment approval.")
+        if st.checkbox("I approve this project for deployment") and st.button("Record Deployment Approval", type="primary"):
+            store.add_approval(project["id"], "deployment", "User approved deployment after readiness review")
+            st.success("Deployment approval recorded. Databricks mutations are now unlocked.")
+    st.caption("Requirement → discovery → environment assessment → capability context → assessment → architecture → metadata → engineering → QA → deployment is recorded as an audit trail.")
 
 elif page == "AI Lab":
     st.subheader("Capgemini GPT-5.1 Test")

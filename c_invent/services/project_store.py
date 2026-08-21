@@ -36,6 +36,9 @@ class ProjectStore:
             CREATE TABLE IF NOT EXISTS audit(
                 id TEXT PRIMARY KEY, project_id TEXT, action TEXT,
                 status TEXT, details TEXT, created_at TEXT);
+            CREATE TABLE IF NOT EXISTS capability_snapshots(
+                id TEXT PRIMARY KEY, project_id TEXT, status TEXT,
+                report_json TEXT, created_at TEXT);
             """)
 
     def now(self): return datetime.now(timezone.utc).isoformat()
@@ -87,6 +90,12 @@ class ProjectStore:
         with self.conn() as c:
             return [dict(x) for x in c.execute("SELECT * FROM artifacts WHERE project_id=? ORDER BY created_at DESC", (pid,))]
 
+    def has_artifact(self, pid, kind, name=None):
+        with self.conn() as c:
+            if name:
+                return c.execute("SELECT 1 FROM artifacts WHERE project_id=? AND kind=? AND name=? LIMIT 1", (pid, kind, name)).fetchone() is not None
+            return c.execute("SELECT 1 FROM artifacts WHERE project_id=? AND kind=? LIMIT 1", (pid, kind)).fetchone() is not None
+
     def save_run(self, pid, agent, status, input_text, output):
         with self.conn() as c:
             c.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",
@@ -119,6 +128,86 @@ class ProjectStore:
         with self.conn() as c:
             c.execute("INSERT INTO audit VALUES(?,?,?,?,?,?)",
                       (str(uuid.uuid4()), pid, action, status, details, self.now()))
+
+    def save_capability_snapshot(self, pid, report, status="success"):
+        with self.conn() as c:
+            c.execute("INSERT INTO capability_snapshots VALUES(?,?,?,?,?)",
+                      (str(uuid.uuid4()), pid, status, json.dumps(report), self.now()))
+        self.add_audit(pid, "capability_check", status, json.dumps(report)[:4000])
+
+    def latest_capability_snapshot(self, pid, success_only=True):
+        with self.conn() as c:
+            q = "SELECT * FROM capability_snapshots WHERE project_id=?"
+            params = [pid]
+            if success_only:
+                q += " AND status='success'"
+            q += " ORDER BY created_at DESC LIMIT 1"
+            row = c.execute(q, params).fetchone()
+            if not row:
+                return None
+            item = dict(row)
+            try:
+                item["report"] = json.loads(item["report_json"])
+            except Exception:
+                item["report"] = item["report_json"]
+            return item
+
+    def has_successful_run(self, pid, agent):
+        with self.conn() as c:
+            return c.execute(
+                "SELECT 1 FROM runs WHERE project_id=? AND agent=? AND status='success' LIMIT 1",
+                (pid, agent)
+            ).fetchone() is not None
+
+    def has_approval(self, pid, artifact_type):
+        with self.conn() as c:
+            return c.execute(
+                "SELECT 1 FROM approvals WHERE project_id=? AND artifact_type=? AND status='APPROVED' LIMIT 1",
+                (pid, artifact_type)
+            ).fetchone() is not None
+
+    def save_intake_pack(self, pid):
+        p = self.get_project(pid)
+        docs = self.documents(pid)
+        text = (p.get("description") or "") + "\n" + "\n".join((d.get("text") or "")[:2500] for d in docs)
+        known = [
+            "SQL Server", "Oracle", "PostgreSQL", "MySQL", "Databricks", "Snowflake",
+            "Microsoft Fabric", "Azure", "AWS", "Google Cloud", "Power BI", "Tableau",
+            "SAP", "Salesforce", "Kafka"
+        ]
+        declared = [x for x in known if x.lower() in text.lower()]
+        pack = {
+            "project": {"name": p.get("name"), "domain": p.get("domain"), "description": p.get("description")},
+            "customer_intent": p.get("description") or "",
+            "documents": [
+                {"name": d["name"], "mime_type": d["mime_type"], "size_bytes": d["size_bytes"]}
+                for d in docs
+            ],
+            "declared_technology_context": declared,
+            "facts": [
+                "Customer intent captured" if p.get("description") else "Customer intent missing",
+                f"{len(docs)} customer document(s) available"
+            ],
+            "unknowns_to_confirm": [
+                "Source systems, versions and inventory",
+                "Target platform and cloud environment",
+                "Data volume, growth and retention",
+                "Incremental/CDC and ingestion patterns",
+                "Security, privacy, governance and access model",
+                "Service levels, batch windows and recovery objectives",
+                "Existing reports, interfaces and downstream consumers",
+                "Available APIs, SDKs, workspaces and deployment permissions"
+            ]
+        }
+        self.save_artifact(pid, "intake", "intake_pack.json", "json", json.dumps(pack, indent=2))
+        self.add_audit(pid, "intake_pack", "success", json.dumps(pack)[:4000])
+        return pack
+
+    def environment_assessment(self, pid):
+        return self.latest_run(pid, "environment")
+
+    def has_environment_assessment(self, pid):
+        return self.has_successful_run(pid, "environment")
 
     def audit(self, pid):
         with self.conn() as c:
