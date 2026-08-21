@@ -194,7 +194,20 @@ if page == "Command Center":
 
     st.divider()
     st.subheader("Business intent")
-    prompt = st.text_area("Customer requirement", value=project.get("description") or "", height=150, label_visibility="collapsed")
+    current_intent = project.get("description") or ""
+    if current_intent.startswith("Capgemini gateway timed out") or current_intent.startswith("Capgemini HTTP "):
+        st.warning("The stored business-intent field contains a provider error from an earlier POC run. C INVENT will not treat provider errors as customer intent.")
+        intake_artifact = store.latest_artifact(project["id"], "intake_pack")
+        if intake_artifact:
+            try:
+                recovered = json.loads(intake_artifact.get("content", "{}"))
+                current_intent = recovered.get("customer_intent") or ""
+                if current_intent:
+                    store.update_project(project["id"], description=current_intent)
+                    project = store.get_project(project["id"])
+            except Exception:
+                current_intent = ""
+    prompt = st.text_area("Customer requirement", value=current_intent, height=150, label_visibility="collapsed")
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Save Customer Intent", type="primary", use_container_width=True):
@@ -231,13 +244,21 @@ if page == "Command Center":
                     st.success("Environment Assessment completed.")
                     st.rerun()
         elif not s["assessment"]:
+            st.markdown("**Assessment scope**")
+            st.caption("C INVENT is assessing delivery readiness — not simply whether Databricks is connected.")
+            ac1, ac2, ac3, ac4 = st.columns(4)
+            ac1.markdown("**Business / Use Case**\nObjectives · processes · actors · requirements")
+            ac2.markdown("**Data / Sources**\nCurrent systems · sources · inventory gaps · migration evidence")
+            ac3.markdown("**Platform / Environment**\nTarget platform · access · verified capabilities · constraints")
+            ac4.markdown("**Governance / Delivery**\nSecurity · privacy · SLAs · RPO/RTO · dependencies")
+            st.caption("Evidence sources: Customer Intent + Discovery + Environment Assessment. The assessment is deterministic and does not require a Capgemini model call.")
             if st.button("Run Current-State Assessment", type="primary", use_container_width=True):
-                with st.spinner("Assessing readiness, complexity, risks and gaps..."):
+                with st.spinner("Building evidence-based Current-State Assessment..."):
                     result = orch.run_assessment(project["id"])
                 if isinstance(result, dict) and result.get("error"):
                     st.error(result["error"])
                 else:
-                    st.success("Current-State Assessment completed.")
+                    st.success("Current-State Assessment completed from Discovery + Environment evidence. No LLM call is required for this gate.")
                     st.rerun()
         elif not s["architecture"]:
             if st.button("Generate Architecture", type="primary", use_container_width=True):
@@ -285,7 +306,7 @@ if page == "Command Center":
         st.markdown("**Governance**")
         st.caption("Customer facts → structured artifacts → approvals → controlled execution")
         if not settings.llm_api_key or not settings.llm_base_url:
-            st.warning("AI provider is not configured. Configure Capgemini under AI Connectivity before AI stages.")
+            st.warning("AI provider is not configured. Configure Capgemini under AI Connectivity for AI-assisted stages. Evidence-based Assessment does not require the LLM.")
         if not db.configured:
             st.caption("Databricks is not connected. Platform-specific capability checks will report this when applicable.")
 
@@ -358,20 +379,89 @@ elif page == "Environment Assessment":
 
 elif page == "Assessment":
     st.subheader("Current-State Assessment")
+    st.caption("Assessment is an evidence-based delivery-readiness gate. It evaluates the business/use case, data and sources, platform/environment, and governance/delivery conditions. It does not treat a platform connection as proof of business readiness, and it does not require Capgemini to complete the gate.")
     if not s["environment"]:
         gate_message("Run a current Environment Assessment first.")
     else:
-        if st.button("Generate Assessment", type="primary"):
-            with st.spinner("Assessing current state..."):
+        run = s["runs"]["assessment"]
+        if st.button("Run / Refresh Current-State Assessment", type="primary"):
+            with st.spinner("Building evidence-based Current-State Assessment..."):
                 result = orch.run_assessment(project["id"])
             if isinstance(result, dict) and result.get("error"):
                 st.error(result["error"])
             else:
-                st.json(result)
-                st.success("Assessment completed.")
+                st.success("Assessment completed from Discovery + Environment evidence. No LLM call is required for this gate.")
+                st.rerun()
         run = s["runs"]["assessment"]
-        if run:
-            st.json(run.get("output"))
+        if run and isinstance(run.get("output"), dict):
+            out = run["output"]
+            decision = out.get("decision", "UNKNOWN")
+            if decision.startswith("GO"):
+                st.success(f"Assessment decision: {decision}")
+            elif decision.startswith("CONDITIONAL"):
+                st.warning(f"Assessment decision: {decision}")
+            else:
+                st.error(f"Assessment decision: {decision}")
+
+            st.markdown("### What is being assessed")
+            dims = out.get("dimensions", {})
+            labels = {
+                "business_use_case": "Business / Use Case",
+                "data_and_sources": "Data & Sources",
+                "platform_and_environment": "Platform & Environment",
+                "governance_and_delivery": "Governance & Delivery",
+            }
+            cols = st.columns(4)
+            for col, key in zip(cols, labels):
+                d = dims.get(key, {})
+                col.metric(labels[key], d.get("status", "Unknown"))
+
+            for key, label in labels.items():
+                d = dims.get(key, {})
+                with st.expander(f"{label} — {d.get('status', 'Unknown')}", expanded=True):
+                    st.markdown(f"**What C INVENT assesses:** {d.get('what_is_assessed', 'Not specified')}")
+                    src = d.get("source", [])
+                    if src:
+                        st.caption("Evidence source: " + " · ".join(src))
+                    if d.get("target_platform"):
+                        st.write("**Target platform:**", d.get("target_platform"))
+                    if d.get("current_environment"):
+                        st.write("**Current environment:**", d.get("current_environment"))
+                    if d.get("evidence"):
+                        st.markdown("**Evidence / findings**")
+                        for item in d.get("evidence", []):
+                            st.write("• " + str(item))
+                    if d.get("open_items"):
+                        st.markdown("**Open items / gaps**")
+                        for item in d.get("open_items", []):
+                            st.write("⚠ " + str(item))
+                    if d.get("capabilities"):
+                        st.markdown("**Verified platform capability evidence**")
+                        st.json(d.get("capabilities"))
+
+            st.markdown("### Risks, assumptions and unknowns")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown("**Risks / blockers**")
+                for x in out.get("risks", []) or ["None recorded"]:
+                    st.write("• " + str(x))
+            with c2:
+                st.markdown("**Assumptions**")
+                for x in out.get("assumptions", []) or ["None recorded"]:
+                    st.write("• " + str(x))
+            with c3:
+                st.markdown("**Unknowns**")
+                for x in out.get("unknowns", []) or ["None recorded"]:
+                    st.write("• " + str(x))
+
+            st.markdown("### Recommended next actions")
+            for x in out.get("recommended_next_actions", []):
+                st.write("→ " + str(x))
+
+            with st.expander("Traceability", expanded=False):
+                st.json(out.get("traceability", {}))
+        elif not run:
+            st.info("No current assessment exists yet. Run the assessment to create the evidence-backed Assessment artifact.")
 
 elif page == "Solution Blueprint":
     st.subheader("Solution Blueprint / Architecture")

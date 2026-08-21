@@ -183,14 +183,176 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
             return out
 
     def run_assessment(self,pid):
-        discovery=self._success(pid,"discovery")
-        environment=self._success(pid,"environment_assessment")
+        """Build an evidence-first current-state assessment without making the LLM a gate.
+
+        Assessment is a delivery-control decision, not another generic AI generation step.
+        The deterministic layer evaluates the discovered use case, data/source evidence,
+        platform evidence and governance/delivery unknowns. An optional AI enrichment may
+        be added later, but a Capgemini gateway timeout must never block the lifecycle.
+        """
+        discovery = self._success(pid, "discovery")
+        environment = self._success(pid, "environment_assessment")
         if not discovery:
             return {"error": "Assessment requires a successful Discovery result."}
         if not environment or not self._fresh_after(environment, discovery):
             return {"error": "Assessment requires a current Environment Assessment after the latest Discovery."}
-        ctx=json.dumps({"discovery": discovery.get("output"), "environment_assessment": environment.get("output")}, ensure_ascii=False)[:12000]
-        return self._run(pid,"assessment",prompts.ASSESSMENT,ctx,evidence_limit=7000,use_documents=True,max_tokens=1200)
+
+        d = discovery.get("output") if isinstance(discovery.get("output"), dict) else {}
+        e = environment.get("output") if isinstance(environment.get("output"), dict) else {}
+
+        def items(key, source=d):
+            value = source.get(key, []) if isinstance(source, dict) else []
+            if isinstance(value, list):
+                return [str(x) for x in value if str(x).strip()]
+            if value is None:
+                return []
+            return [str(value)]
+
+        def unique(values):
+            out=[]
+            seen=set()
+            for v in values:
+                k=v.strip().lower()
+                if k and k not in seen:
+                    seen.add(k); out.append(v.strip())
+            return out
+
+        objectives = items("objectives")
+        processes = items("processes")
+        actors = items("actors")
+        systems = items("systems")
+        sources = items("sources")
+        requirements = items("requirements")
+        assumptions = items("assumptions")
+        unknowns = unique(items("unknowns"))
+        target = e.get("target_platform") or "Unknown / to be confirmed"
+        current_env = e.get("current_environment") or systems
+        access = e.get("access") or {}
+        capabilities = e.get("capabilities") or e.get("platform_capability_evidence") or {}
+        constraints = items("constraints", e)
+        env_gaps = items("gaps", e)
+        env_unknowns = items("unknowns", e)
+
+        business_evidence = unique([
+            "Customer objective is captured." if d.get("summary") else "Customer objective is not yet evidenced.",
+            f"{len(objectives)} objective(s) identified." if objectives else "No structured objectives identified.",
+            f"{len(processes)} process/use-case item(s) identified." if processes else "No business processes/use cases identified.",
+            f"{len(actors)} stakeholder/actor group(s) identified." if actors else "Stakeholder groups are not yet evidenced.",
+            f"{len(requirements)} requirement item(s) identified." if requirements else "Requirements are not yet sufficiently structured.",
+        ])
+        if objectives and processes and actors and requirements:
+            business_status = "READY WITH OPEN DECISIONS"
+        elif objectives or processes or requirements:
+            business_status = "CONDITIONAL"
+        else:
+            business_status = "INSUFFICIENT EVIDENCE"
+
+        data_findings = unique([
+            f"Current system evidence: {', '.join(systems[:4])}." if systems else "Current source system is not yet evidenced.",
+            f"Source/data evidence: {', '.join(sources[:5])}." if sources else "Source inventory is not yet available.",
+            "Table/schema inventory is not yet available." if not any("table" in u.lower() or "schema" in u.lower() for u in unknowns) else "Table/schema inventory is identified as an open item.",
+        ])
+        data_blockers = [u for u in unknowns if any(k in u.lower() for k in ("volume", "cdc", "table", "schema", "data quality", "retention"))]
+        if systems and sources and not data_blockers:
+            data_status = "CONDITIONAL"
+        elif systems or sources:
+            data_status = "CONDITIONAL / EVIDENCE REQUIRED"
+        else:
+            data_status = "INSUFFICIENT EVIDENCE"
+
+        capability_configured = bool(capabilities.get("configured")) if isinstance(capabilities, dict) else False
+        capability_errors = []
+        if isinstance(capabilities, dict):
+            for key, value in capabilities.items():
+                if isinstance(value, dict) and value.get("error"):
+                    capability_errors.append(f"{key}: {value.get('error')}")
+        platform_findings = unique([
+            f"Target platform established as {target}." if target != "Unknown / to be confirmed" else "Target platform is not yet established.",
+            "C INVENT Databricks connection is configured." if capability_configured else "C INVENT does not have verified Databricks connectivity in this assessment.",
+            *[str(x) for x in env_gaps[:5]],
+            *capability_errors[:5],
+        ])
+        if target == "Databricks" and capability_configured and not capability_errors:
+            platform_status = "VERIFIED / CONDITIONAL ON REQUIRED PERMISSIONS"
+        elif target == "Unknown / to be confirmed":
+            platform_status = "NOT YET ASSESSABLE"
+        else:
+            platform_status = "CONDITIONAL"
+
+        governance_keywords = ("security", "privacy", "phi", "pii", "compliance", "regulat", "rbac", "access", "retention", "rpo", "rto", "sla")
+        governance_unknowns = [u for u in unknowns + env_unknowns if any(k in u.lower() for k in governance_keywords)]
+        governance_findings = unique([
+            "Governance/compliance requirements are referenced in Discovery." if any(any(k in x.lower() for k in governance_keywords) for x in requirements + assumptions) else "Governance requirements are not sufficiently evidenced.",
+            *governance_unknowns[:6],
+        ])
+        governance_status = "CONDITIONAL" if governance_unknowns or not requirements else "READY WITH REVIEW"
+
+        blockers = unique(data_blockers + governance_unknowns + env_gaps)[:12]
+        if business_status.startswith("INSUFFICIENT") or platform_status == "NOT YET ASSESSABLE":
+            decision = "NO-GO / MORE DISCOVERY REQUIRED"
+        elif blockers:
+            decision = "CONDITIONAL GO"
+        else:
+            decision = "GO TO ARCHITECTURE"
+
+        result = {
+            "assessment_type": "evidence_based_current_state",
+            "summary": f"Current-state delivery readiness assessment based on the latest Discovery and Environment Assessment. Decision: {decision}.",
+            "decision": decision,
+            "dimensions": {
+                "business_use_case": {
+                    "status": business_status,
+                    "what_is_assessed": "Business objectives, use cases/processes, stakeholders and stated requirements.",
+                    "evidence": business_evidence,
+                    "source": ["Customer Intent", "Discovery Run"],
+                },
+                "data_and_sources": {
+                    "status": data_status,
+                    "what_is_assessed": "Current systems, source/data evidence and whether the information needed for migration/data design is available.",
+                    "evidence": data_findings,
+                    "open_items": data_blockers[:8],
+                    "source": ["Discovery Run", "Customer Documents"],
+                },
+                "platform_and_environment": {
+                    "status": platform_status,
+                    "what_is_assessed": "Discovered target/current platform plus verified access and capability evidence; this does not infer missing capabilities.",
+                    "current_environment": current_env,
+                    "target_platform": target,
+                    "access": access,
+                    "capabilities": capabilities,
+                    "evidence": platform_findings,
+                    "source": ["Discovery Run", "Environment Assessment"],
+                },
+                "governance_and_delivery": {
+                    "status": governance_status,
+                    "what_is_assessed": "Security, privacy, compliance, SLA, RPO/RTO, access, retention and delivery dependencies visible in the evidence.",
+                    "evidence": governance_findings,
+                    "open_items": governance_unknowns[:8],
+                    "source": ["Discovery Run", "Environment Assessment"],
+                },
+            },
+            "risks": blockers[:10],
+            "assumptions": assumptions[:10],
+            "unknowns": unique(unknowns + env_unknowns)[:15],
+            "recommended_next_actions": [
+                "Resolve the listed evidence gaps before final architecture decisions." if blockers else "Proceed to architecture with the recorded evidence.",
+                "Keep platform capability evidence separate from customer-stated requirements.",
+                "Require human approval before downstream metadata and engineering generation.",
+            ],
+            "traceability": {
+                "discovery_run_id": discovery.get("id"),
+                "environment_assessment_run_id": environment.get("id"),
+                "discovery_created_at": discovery.get("created_at"),
+                "environment_assessment_created_at": environment.get("created_at"),
+                "assessment_mode": "deterministic_evidence_first",
+                "ai_dependency": "not required for lifecycle progression",
+            },
+        }
+        content=json.dumps(result, indent=2, ensure_ascii=False)
+        self.store.save_run(pid, "assessment", "success", "Deterministic evidence-first current-state assessment", result)
+        self.store.save_artifact(pid, "assessment", "current_state_assessment.json", "json", content)
+        self.store.add_audit(pid, "delivery:assessment", "success", content[:6000])
+        return result
 
     def run_blueprint(self,pid):
         """Generate a compact blueprint from the persisted Discovery result.
