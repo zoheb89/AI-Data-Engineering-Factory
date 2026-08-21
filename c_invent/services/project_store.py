@@ -20,7 +20,7 @@ class ProjectStore:
             c.executescript("""
             CREATE TABLE IF NOT EXISTS projects(
                 id TEXT PRIMARY KEY, name TEXT, domain TEXT, description TEXT,
-                created_at TEXT, updated_at TEXT);
+                created_at TEXT, updated_at TEXT, source TEXT DEFAULT 'legacy');
             CREATE TABLE IF NOT EXISTS documents(
                 id TEXT PRIMARY KEY, project_id TEXT, name TEXT, mime_type TEXT,
                 size_bytes INTEGER, text TEXT, metadata_json TEXT, created_at TEXT);
@@ -37,15 +37,51 @@ class ProjectStore:
                 id TEXT PRIMARY KEY, project_id TEXT, action TEXT,
                 status TEXT, details TEXT, created_at TEXT);
             """)
+            # Backward-compatible migration for databases created before 0.1.9.
+            cols = {row[1] for row in c.execute("PRAGMA table_info(projects)").fetchall()}
+            if "source" not in cols:
+                c.execute("ALTER TABLE projects ADD COLUMN source TEXT DEFAULT 'legacy'")
 
     def now(self): return datetime.now(timezone.utc).isoformat()
 
-    def create_project(self, name, domain="", description=""):
+    def create_project(self, name, domain="", description="", source="user"):
         pid = str(uuid.uuid4())
+        now = self.now()
         with self.conn() as c:
-            c.execute("INSERT INTO projects VALUES(?,?,?,?,?,?)",
-                      (pid, name, domain, description, self.now(), self.now()))
+            c.execute("INSERT INTO projects(id,name,domain,description,created_at,updated_at,source) VALUES(?,?,?,?,?,?,?)",
+                      (pid, name, domain, description, now, now, source))
         return pid
+
+    def ensure_single_clean_workspace(self):
+        """One-time-safe cleanup of legacy auto-created blank Untitled projects.
+
+        Only projects with no customer evidence/artifacts/runs/approvals and whose
+        source is legacy/system are eligible. Explicit user-created projects are
+        never removed. Returns the retained project id, if any.
+        """
+        with self.conn() as c:
+            rows = [dict(r) for r in c.execute(
+                "SELECT * FROM projects WHERE source IN ('legacy','system') "
+                "AND (name='Untitled Customer Project' OR name IS NULL OR name='') "
+                "ORDER BY updated_at DESC"
+            )]
+            if not rows:
+                return None
+            keep = rows[0]
+            for p in rows[1:]:
+                pid = p["id"]
+                has_data = any([
+                    c.execute("SELECT 1 FROM documents WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM artifacts WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM runs WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM approvals WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                    c.execute("SELECT 1 FROM audit WHERE project_id=? LIMIT 1", (pid,)).fetchone(),
+                ])
+                if not has_data:
+                    c.execute("DELETE FROM projects WHERE id=?", (pid,))
+            # The retained legacy project becomes the stable system seed.
+            c.execute("UPDATE projects SET source='system' WHERE id=?", (keep["id"],))
+            return keep["id"]
 
     def list_projects(self):
         with self.conn() as c:

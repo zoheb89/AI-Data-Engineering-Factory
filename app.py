@@ -120,15 +120,17 @@ def gate_message(text):
     st.warning(text)
 
 
-# Do not create a project on every fresh Streamlit session. Reuse the latest
-# existing project and create a project only when the user explicitly asks.
+# Workspace bootstrap: clean up only legacy/system-created blank projects.
+# Explicitly created customer projects are never deleted by startup cleanup.
+store.ensure_single_clean_workspace()
 projects = store.list_projects()
+if not projects:
+    st.session_state.project_id = store.create_project(
+        "Untitled Customer Project", "Unknown", "", source="system"
+    )
+    projects = store.list_projects()
 if "project_id" not in st.session_state or not store.get_project(st.session_state.project_id):
-    if projects:
-        st.session_state.project_id = projects[0]["id"]
-    else:
-        st.session_state.project_id = store.create_project("Untitled Customer Project", "Unknown", "")
-        projects = store.list_projects()
+    st.session_state.project_id = projects[0]["id"]
 
 project = store.get_project(st.session_state.project_id)
 
@@ -136,7 +138,9 @@ with st.sidebar:
     st.markdown("# 🧠 C INVENT")
     st.caption(f"Enterprise AI Delivery Factory · {settings.app_version}")
     if st.button("＋ New Project", use_container_width=True):
-        st.session_state.project_id = store.create_project("Untitled Customer Project", "Unknown", "")
+        st.session_state.project_id = store.create_project(
+            "Untitled Customer Project", "Unknown", "", source="user"
+        )
         st.rerun()
     if st.button("↻ Start Fresh", use_container_width=True):
         st.session_state.confirm_reset = True
@@ -147,7 +151,9 @@ with st.sidebar:
                 store.reset_workspace()
                 st.session_state.pop("confirm_reset", None)
                 st.session_state.pop("confirm_reset_checkbox", None)
-                st.session_state.project_id = store.create_project("Untitled Customer Project", "Unknown", "")
+                st.session_state.project_id = store.create_project(
+            "Untitled Customer Project", "Unknown", "", source="user"
+        )
                 st.rerun()
     projects = store.list_projects()
     labels = {p["id"]: f'{p["name"]} · {p["id"][:8]}' for p in projects}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from typing import Any
 
@@ -178,52 +179,77 @@ class CapgeminiLLM:
         return json.dumps(obj, indent=2, ensure_ascii=False)
 
     def invoke_json(self, text: str, system_prompt: str = "", **kwargs):
-        """Invoke JSON mode with a compact retry for gateway timeouts.
+        """Invoke JSON mode with bounded gateway-timeout recovery.
 
-        The Capgemini gateway can return HTTP 504 for oversized/slow requests.
-        C INVENT therefore retries once with a bounded context and lower output
-        budget instead of repeatedly sending the same expensive request.
+        Capgemini may return HTTP 504 when the gateway cannot complete a
+        synchronous model invocation within its server-side window. A client
+        timeout value cannot fix that condition, so retries deliberately shrink
+        the request instead of simply waiting longer.
         """
-        try:
-            result = self.invoke(text, system_prompt, **kwargs)
-        except CapgeminiLLMError as exc:
-            msg = str(exc)
-            if "HTTP 504" not in msg and "timed out" not in msg.lower():
-                raise
-            compact_text = text[:3500]
-            compact_system = system_prompt[:1800]
-            compact_params = dict(kwargs.get("extra_params") or {})
-            compact_params["maxTokens"] = min(int(compact_params.get("maxTokens", 400)), 400)
-            compact_params["temperature"] = 0.0
-            compact_params["streaming"] = False
-            compact_params["topP"] = 0.9
-            result = self.invoke(
-                compact_text,
-                compact_system,
-                session_id=kwargs.get("session_id"),
-                extra_params=compact_params,
-            )
+        extra = dict(kwargs.get("extra_params") or {})
+        session_id = kwargs.get("session_id")
+
+        attempts = [
+            (text, system_prompt, extra),
+            (text[:3000], system_prompt[:1400], {**extra, "maxTokens": min(int(extra.get("maxTokens", 400)), 350), "temperature": 0.0, "streaming": False, "topP": 0.9}),
+            (text[:1800], system_prompt[:800], {**extra, "maxTokens": min(int(extra.get("maxTokens", 250)), 220), "temperature": 0.0, "streaming": False, "topP": 0.9}),
+        ]
+
+        last_error = None
+        result = None
+        for idx, (attempt_text, attempt_system, attempt_params) in enumerate(attempts):
+            try:
+                # Use a fresh session on gateway retries. This avoids reusing a
+                # server-side invocation context that may itself be stalled.
+                attempt_session = session_id if idx == 0 else str(uuid.uuid4())
+                result = self.invoke(
+                    attempt_text,
+                    attempt_system,
+                    files=None if idx else kwargs.get("files"),
+                    session_id=attempt_session,
+                    extra_params=attempt_params,
+                )
+                break
+            except CapgeminiLLMError as exc:
+                last_error = exc
+                msg = str(exc).lower()
+                if "http 504" not in msg and "timed out" not in msg and "gateway timeout" not in msg:
+                    raise
+                if idx < len(attempts) - 1:
+                    # Small backoff gives the gateway a chance to clear the
+                    # previous request without making the UI feel hung.
+                    time.sleep(1.5 * (idx + 1))
+
+        if result is None:
+            raise CapgeminiLLMError(
+                "Capgemini gateway timed out after 3 bounded attempts. "
+                "The endpoint is reachable, but the model invocation did not "
+                "complete within the gateway window. Try again or ask the "
+                "Capgemini platform team to check the endpoint/model latency."
+            ) from last_error
 
         content = result["content"].strip()
         cleaned = self._clean_json_fence(content)
         try:
             return json.loads(cleaned)
         except Exception:
-            # Repair only the returned answer, bounded to avoid another timeout.
+            # JSON repair is also bounded. Never resend the original large
+            # request after a successful model response.
             repair_text = (
-                "Convert the following answer to valid JSON only. No markdown. "
-                "Preserve the available information and do not add facts.\n\n"
-                + content[:9000]
+                "Convert this answer to valid JSON only. No markdown. "
+                "Preserve information; do not add facts.\n\n" + content[:4500]
             )
-            repair_params = dict(kwargs.get("extra_params") or {})
-            repair_params["maxTokens"] = min(int(repair_params.get("maxTokens", 900)), 900)
-            repair_params["temperature"] = 0.0
-            repair_params["streaming"] = False
+            repair_params = {
+                "maxTokens": 500,
+                "temperature": 0.0,
+                "streaming": False,
+                "topP": 0.9,
+            }
             try:
                 repair = self.invoke(
                     repair_text,
                     "Return valid JSON only.",
-                    session_id=kwargs.get("session_id"),
+                    session_id=str(uuid.uuid4()),
                     extra_params=repair_params,
                 )
                 repaired = self._clean_json_fence(repair["content"].strip())

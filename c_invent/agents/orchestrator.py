@@ -135,26 +135,25 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
         # stages after Discovery has produced a structured intermediate result.
         docs = self.store.documents(pid)
         compact_system = (
-            "You are the C INVENT Discovery Agent. Analyze the business intent and "
-            "only the supplied evidence. Do not invent facts. Return JSON only. "
-            "Keep the response concise (normally under 500 tokens). Include: "
-            "summary, domain, objectives, processes, actors, systems, sources, "
-            "requirements, assumptions, unknowns, and next_steps."
+            "You are the C INVENT Discovery Agent. Analyze only supplied evidence. "
+            "Do not invent facts. Return compact JSON only. Use short arrays and "
+            "short phrases. Include: summary, domain, objectives, processes, "
+            "actors, systems, sources, requirements, assumptions, unknowns, next_steps."
         )
         evidence=[]
-        budget=6000
+        budget=4200
         for d in docs:
             if budget <= 0:
                 break
-            txt=(d.get("text") or "")[:min(2000,budget)]
+            txt=(d.get("text") or "")[:min(1400,budget)]
             if txt:
                 evidence.append(f"DOCUMENT {d['name']}:\n{txt}")
                 budget -= len(txt)
         combined="\n\n".join(x for x in evidence if x)
         if context:
-            combined += ("\n\n" if combined else "") + context[:3000]
+            combined += ("\n\n" if combined else "") + context[:1800]
         user=(
-            "CUSTOMER INTENT:\n" + prompt[:4000] +
+            "CUSTOMER INTENT:\n" + prompt[:2600] +
             "\n\nSUPPLIED EVIDENCE:\n" + (combined or "No supporting documents supplied yet.") +
             "\n\nReturn concise JSON with exactly these core fields: "
             "summary, domain, objectives, processes, actors, systems, sources, "
@@ -164,7 +163,7 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
             out=self.llm.invoke_json(
                 user, compact_system,
                 extra_params={
-                    "maxTokens": 600,
+                    "maxTokens": 350,
                     "temperature": 0.0,
                     "streaming": False,
                     "topP": 0.9,
