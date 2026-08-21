@@ -7,7 +7,7 @@ from c_invent.services.document_intel import extract_upload
 from c_invent.agents.orchestrator import Orchestrator
 from c_invent.databricks.client import DatabricksClient
 from c_invent.ui.styles import inject_css
-from c_invent.services.platforms import PLATFORM_CATALOG, SUPPORTED_PLATFORMS, derive_state, detect_platform, normalize_platform, secret_status, secret_value
+from c_invent.services.platforms import PLATFORM_CATALOG, SUPPORTED_PLATFORMS, derive_state, detect_platform, normalize_platform, secret_status, secret_value, environment_fields
 from c_invent.services.action_registry import next_action_spec, applicable_actions, action_context
 from c_invent.services.architecture_view import platform_fit, architecture_model, selected_platform_evaluation
 
@@ -31,6 +31,13 @@ st.markdown("""
 .arch-arrow{font-size:22px;font-weight:800;color:#98a2b3;padding:38px 8px 0}
 .arch-cross{margin-top:18px;padding-top:14px;border-top:1px dashed #cfd6df;font-size:12px;color:#667085}
 .arch-chip{display:inline-block;padding:5px 9px;border-radius:999px;background:#eef2f6;margin:7px 5px 0 0;font-size:11px;color:#475467}
+html,body,[class*='st-'],.stApp{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif!important}
+.stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp h5,.stApp h6,.stMarkdown,.stText,.stCaption,.stButton button,.stSelectbox,.stTextInput,.stTextArea,.stMetric,.stAlert{font-family:inherit!important}
+.stApp h1{font-size:2rem!important;line-height:1.15!important;font-weight:800!important}.stApp h2{font-size:1.45rem!important;line-height:1.2!important;font-weight:800!important}.stApp h3{font-size:1.12rem!important;line-height:1.25!important;font-weight:800!important}.stApp p,.stApp li,.stApp label{font-size:.9rem;line-height:1.45}
+code,pre,[data-testid='stCode'],[data-testid='stJson']{font-family:'SFMono-Regular',Consolas,'Liberation Mono',monospace!important}
+.ui-card{border:1px solid #e5e7eb;border-radius:14px;background:#fff;padding:15px 16px;margin:6px 0 10px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.ui-card-title{font-weight:800;font-size:15px;color:#111827;margin-bottom:6px}.ui-card-sub{font-size:12px;color:#667085;line-height:1.45}
+.fit-row{display:grid;grid-template-columns:170px 1fr 72px;gap:12px;align-items:center;margin:9px 0}.fit-name{font-weight:750;font-size:13px}.fit-track{height:9px;background:#edf0f3;border-radius:99px;overflow:hidden}.fit-fill{height:100%;background:#ff3621;border-radius:99px}.fit-pct{text-align:right;font-weight:800;font-size:13px}
 @media(max-width:900px){.arch-head{display:block}.arch-target{margin-top:12px}.arch-flow{min-width:1000px}}
 </style>
 """, unsafe_allow_html=True)
@@ -52,6 +59,36 @@ STAGES = [
     ("Deploy", "deploy"),
     ("Operate", "operate"),
 ]
+
+STAGE_PAGES = {
+    "intake": "Intake & Documents",
+    "discovery": "AI Discovery",
+    "environment": "Environment Assessment",
+    "assessment": "Assessment",
+    "architecture": "Solution Blueprint",
+    "platform": "Platform Workspace",
+    "metadata": "Metadata",
+    "engineering": "Engineering Factory",
+    "validate": "QA & Traceability",
+    "deploy": "Platform Factory",
+    "operate": "Platform Factory",
+}
+
+
+def stage_gate_state(s):
+    return {
+        "intake": True,
+        "discovery": bool(s.get("intake")),
+        "environment": bool(s.get("discovery")),
+        "assessment": bool(s.get("environment")),
+        "architecture": bool(s.get("assessment")),
+        "platform": bool(s.get("architecture_approved")),
+        "metadata": bool(s.get("architecture_approved") and s.get("platform")),
+        "engineering": bool(s.get("metadata")),
+        "validate": bool(s.get("engineering")),
+        "deploy": bool(s.get("validate")),
+        "operate": bool(s.get("deploy")),
+    }
 
 
 def get_platform_config_safe(pid):
@@ -140,22 +177,26 @@ def current_action(s):
 
 
 def render_stepper(s):
-    active = next_action(s)
-    rows = []
-    for label, key in STAGES:
-        done = bool(s.get(key, False))
-        if key == "architecture" and s.get("architecture_approved"):
-            done = True
-        if label == active or (active.startswith("Approve") and key == "architecture") or (active.startswith("Approve Deployment") and key == "deploy"):
-            cls = "current"
-        elif done:
-            cls = "done"
-        else:
-            cls = "locked"
-        icon = "✓" if done else ("●" if cls == "current" else "○")
-        rows.append(f'<div class="stage {cls}"><div class="stage-icon">{icon}</div><div class="stage-label">{label}</div></div>')
-    st.markdown('<div class="stepper">' + "".join(rows) + '</div>', unsafe_allow_html=True)
-
+    """Clickable, gate-aware lifecycle navigator."""
+    page_map = STAGE_PAGES
+    gates = stage_gate_state(s)
+    spec=next_action_spec(s)
+    action_stage={
+        "intake.create":"intake", "discovery.run":"discovery", "environment.assess":"environment", "assessment.run":"assessment",
+        "architecture.generate":"architecture", "architecture.approve":"architecture", "platform.configure":"platform",
+        "metadata.generate":"metadata", "engineering.generate":"engineering", "validation.run":"validate",
+        "deployment.approve":"deploy", "operations.start":"operate",
+    }.get(spec.id if spec else "", "")
+    cols=st.columns(len(STAGES))
+    for col,(label,key) in zip(cols,STAGES):
+        done=bool(s.get(key,False)) or (key=="architecture" and s.get("architecture_approved"))
+        enabled=bool(gates.get(key))
+        icon="✓" if done else ("●" if key==action_stage else "○")
+        with col:
+            if st.button(f"{icon}  {label}",key=f"step_{key}",use_container_width=True,disabled=not enabled):
+                st.session_state.active_page=page_map[key]
+                st.rerun()
+    st.caption("Completed/current stages are clickable. Locked stages unlock automatically when their evidence or approval is persisted.")
 
 
 def _safe_html(value):
@@ -193,30 +234,67 @@ def render_architecture_visual(model):
 def render_platform_evaluation(rows, selected=""):
     if not rows:
         return
-    st.markdown("### Platform options — architecture fit, not customer commitment")
-    st.caption("The percentages are a normalized architecture-fit distribution from the current evidence and platform metadata. They are not a prediction of customer behavior. The business/engagement team still makes the final selection.")
-    top = rows[:5]
-    cols = st.columns(min(3, len(top)))
-    for idx, row in enumerate(top[:3]):
+    st.markdown("### Platform options — architecture fit and decision guidance")
+    st.caption("Fit is deterministic architecture scoring from the current evidence. Selection likelihood is an evidence-weighted heuristic for comparison only — it is not a claim about what the customer will actually choose.")
+    top=rows[:3]
+    cols=st.columns(len(top))
+    for idx,row in enumerate(top):
         with cols[idx]:
-            label = "★ Recommended" if idx == 0 else ("Alternative" if idx < 3 else "")
-            st.metric(row["platform"], f'{row["fit_score"]:.1f}% fit', label or row["recommendation"])
-            st.progress(min(1.0, row["fit_score"] / 100.0))
-            if row.get("reasons"):
-                for reason in row["reasons"][:2]:
-                    st.caption("• " + reason)
-    with st.expander("Compare all candidate platforms", expanded=True):
-        headers = st.columns([2.0, 1.1, 1.2, 1.4, 2.8])
-        for c, h in zip(headers, ["Platform", "Fit", "Relative", "Clouds", "Why it scores"]):
-            c.markdown(f"**{h}**")
+            badge="★ Recommended" if idx==0 else "Alternative"
+            selected_badge=" · Selected" if row.get("platform")==selected else ""
+            html=(f'<div class="ui-card"><div class="ui-card-title">{_safe_html(row["platform"])} '
+                  f'<span style="color:#667085;font-size:11px">{badge}{selected_badge}</span></div>'
+                  f'<div class="ui-card-sub">Architecture fit</div>'
+                  f'<div class="fit-row"><div class="fit-name">Fit</div><div class="fit-track"><div class="fit-fill" style="width:{row["fit_score"]}%"></div></div><div class="fit-pct">{row["fit_score"]:.1f}%</div></div>'
+                  f'<div class="ui-card-sub">Evidence-weighted selection likelihood</div>'
+                  f'<div class="fit-row"><div class="fit-name">Likelihood</div><div class="fit-track"><div class="fit-fill" style="width:{row.get("selection_likelihood", row.get("relative_share", 0.0))}%"></div></div><div class="fit-pct">{row.get("selection_likelihood", row.get("relative_share", 0.0)):.1f}%</div></div></div>')
+            st.markdown(html,unsafe_allow_html=True)
+            for reason in row.get("reasons",[])[:3]:
+                st.caption("• "+reason)
+    with st.expander("Compare all candidate platforms",expanded=True):
+        headers=st.columns([1.8,1.0,1.15,1.35,2.8])
+        for c,h in zip(headers,["Platform","Fit","Likelihood","Clouds","Why it scores"]): c.markdown(f"**{h}**")
         for row in rows:
-            r = st.columns([2.0, 1.1, 1.2, 1.4, 2.8])
-            r[0].write(("✓ " if row["platform"] == selected else "") + row["platform"])
+            r=st.columns([1.8,1.0,1.15,1.35,2.8])
+            r[0].write(("✓ " if row["platform"]==selected else "")+row["platform"])
             r[1].write(f'{row["fit_score"]:.1f}%')
-            r[2].write(f'{row["relative_share"]:.1f}%')
-            r[3].write(", ".join(row.get("clouds", [])))
-            r[4].write("; ".join(row.get("reasons", [])) or row["recommendation"])
+            r[2].write(f'{row.get("selection_likelihood", row.get("relative_share", 0.0)):.1f}%')
+            r[3].write(", ".join(row.get("clouds",[])))
+            r[4].write("; ".join(row.get("reasons",[])) or row.get("recommendation",""))
+    st.info("Decision rule: architecture recommends the highest-fit option; the engagement/customer team explicitly confirms the final platform. No platform is treated as provisioned until Platform Workspace verification succeeds.")
 
+
+def render_structured_value(value, bullet_prefix="•", max_items=8):
+    """Render LLM/metadata output safely regardless of list-vs-dict shape.
+
+    Architecture artifacts are contractually JSON but individual sections may be
+    returned as arrays, keyed objects, or nested objects. The UI must never assume
+    one shape because that would turn a valid artifact into a Streamlit crash.
+    """
+    if value is None or value == "":
+        st.caption("Not provided")
+        return
+    if isinstance(value, dict):
+        shown = 0
+        for key, item in value.items():
+            if shown >= max_items:
+                break
+            label = str(key).replace("_", " ").title()
+            if isinstance(item, (dict, list, tuple, set)):
+                st.markdown(f"**{label}**")
+                render_structured_value(item, bullet_prefix=bullet_prefix, max_items=max_items)
+            else:
+                st.markdown(f"**{label}:** {item}")
+            shown += 1
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in list(value)[:max_items]:
+            if isinstance(item, (dict, list, tuple, set)):
+                render_structured_value(item, bullet_prefix=bullet_prefix, max_items=max_items)
+            else:
+                st.write(f"{bullet_prefix} {item}")
+        return
+    st.write(value)
 
 def render_architecture_summary(run, selected_platform=""):
     out = (run or {}).get("output") or {}
@@ -235,7 +313,8 @@ def gate_message(text):
 
 def next_workspace_button(label, target, key):
     """Visible hand-off from a completed stage to the next Delivery Workspace."""
-    st.markdown(f"**Next stage:** {label}")
+    st.markdown(f"### Next stage: {label}")
+    st.caption("The current stage evidence is persisted. Continue to the next workspace; the Control Plane will re-check the gate from persisted state.")
     if st.button(f"Continue to {label} →", key=key, type="primary", use_container_width=True):
         st.session_state.active_page = target
         st.rerun()
@@ -354,14 +433,19 @@ with st.sidebar:
 
         st.markdown("**DELIVERY WORKSPACE**")
         st.caption("The workbench where each delivery stage is performed")
-        nav_button("1 · Intake & Documents", "Intake & Documents")
-        nav_button("2 · AI Discovery", "AI Discovery")
-        nav_button("3 · Environment Assessment", "Environment Assessment")
-        nav_button("4 · Current-State Assessment", "Assessment")
-        nav_button("5 · Solution Blueprint", "Solution Blueprint")
-        nav_button("6 · Platform Workspace", "Platform Workspace")
-        nav_button("7 · Metadata", "Metadata")
-        nav_button("8 · Engineering Factory", "Engineering Factory")
+        sidebar_state = state(st.session_state.project_id)
+        sidebar_gates = stage_gate_state(sidebar_state)
+        sidebar_stage_labels = {
+            "intake":"1 · Intake & Documents", "discovery":"2 · AI Discovery",
+            "environment":"3 · Environment Assessment", "assessment":"4 · Current-State Assessment",
+            "architecture":"5 · Solution Blueprint", "platform":"6 · Platform Workspace",
+            "metadata":"7 · Metadata", "engineering":"8 · Engineering Factory",
+        }
+        for stage_key, stage_label in sidebar_stage_labels.items():
+            enabled = bool(sidebar_gates.get(stage_key))
+            if st.button(stage_label, key=f"stage_nav_{stage_key}", use_container_width=True, disabled=not enabled):
+                st.session_state.active_page = STAGE_PAGES[stage_key]
+                st.rerun()
 
         st.markdown("**PLATFORM WORKSPACE**")
         st.caption("Target-platform implementation and consumption")
@@ -491,14 +575,17 @@ if page == "Command Center":
         ac = st.columns(2)
         with ac[0]:
             st.markdown("**Target architecture**")
-            st.write(arch.get("summary") or arch.get("target_architecture") or "No architecture summary available.")
+            render_structured_value(arch.get("summary") or arch.get("target_architecture") or "No architecture summary available.", max_items=8)
             st.markdown("**Data flow**")
-            st.write(arch.get("data_flow", "Not provided"))
+            render_structured_value(arch.get("data_flow", "Not provided"), max_items=8)
         with ac[1]:
             st.markdown("**Decisions**")
-            for x in arch.get("decisions", [])[:8]: st.write("→ " + str(x))
+            render_structured_value(arch.get("decisions", []), bullet_prefix="→", max_items=8)
             st.markdown("**Open questions / risks**")
-            for x in (arch.get("open_questions", []) + arch.get("risks", []))[:10]: st.write("⚠ " + str(x))
+            st.markdown("*Open questions*")
+            render_structured_value(arch.get("open_questions", []), bullet_prefix="⚠", max_items=6)
+            st.markdown("*Risks*")
+            render_structured_value(arch.get("risks", []), bullet_prefix="⚠", max_items=6)
         st.caption("Architecture source chain: Discovery → Environment Assessment → Current-State Assessment → Architecture generation")
 
     st.divider()
@@ -565,13 +652,25 @@ elif page == "Intake & Documents":
             st.success(f"Processed {count} new document(s).")
     st.divider()
     if store.artifact_exists(project["id"], "intake_pack"):
-        st.success("Intake Pack exists.")
-        pack = store.latest_artifact(project["id"], "intake_pack")
-        st.code(pack["content"], language="json")
+        st.success("Intake Pack exists and is persisted for this project.")
+        pack=store.latest_artifact(project["id"],"intake_pack")
+        try: pack_out=json.loads(pack.get("content") or "{}")
+        except Exception: pack_out={}
+        c1,c2,c3=st.columns(3)
+        c1.metric("Customer",pack_out.get("project",{}).get("name",project.get("name","")))
+        c2.metric("Domain",pack_out.get("project",{}).get("domain",project.get("domain","Unknown")))
+        c3.metric("Evidence files",len(pack_out.get("customer_material",[])))
+        st.markdown("#### Customer intent captured")
+        st.info(pack_out.get("customer_intent") or "No customer intent captured.")
+        st.markdown("#### Intake unknowns")
+        render_structured_value(pack_out.get("unknowns",[]) or ["None recorded"],max_items=6)
+        with st.expander("Intake Pack JSON / traceability",expanded=False): st.json(pack_out or pack.get("content"))
+        next_workspace_button("AI Discovery","AI Discovery","continue_after_intake")
     else:
-        if st.button("Create Intake Pack", type="primary"):
+        if st.button("Create Intake Pack",type="primary"):
             orch.capture_intake(project["id"])
             st.success("Intake Pack created. Next step: Discovery.")
+            st.rerun()
     for d in store.documents(project["id"]):
         with st.expander(f"📄 {d['name']} · {d['size_bytes']:,} bytes"):
             st.caption(d["mime_type"])
@@ -579,54 +678,84 @@ elif page == "Intake & Documents":
 
 elif page == "AI Discovery":
     st.subheader("AI Discovery")
+    st.caption("Discovery converts customer intent and supplied evidence into structured facts. It does not provision the target platform.")
     if not s["intake"]:
         gate_message("Create the Intake Pack before Discovery.")
+        next_workspace_button("Intake & Documents","Intake & Documents","back_to_intake_from_discovery")
     elif not (settings.llm_api_key and settings.llm_base_url):
         st.error("AI provider is not configured. Use AI Connectivity to configure/test Capgemini GPT.")
     else:
-        prompt = st.text_area("Discovery objective", value=project.get("description") or "Analyze this customer engagement.", height=120)
-        if st.button("Execute discovery.run", type="primary"): 
+        prompt=st.text_area("Discovery objective",value=project.get("description") or "Analyze this customer engagement.",height=120)
+        if st.button("Execute discovery.run",type="primary"):
             with st.spinner("Analyzing evidence..."):
-                result = orch.run_discovery(project["id"], prompt)
-            if isinstance(result, dict) and result.get("error"):
-                st.error(result["error"])
+                result=orch.run_discovery(project["id"],prompt)
+            if isinstance(result,dict) and result.get("error"): st.error(result["error"])
             else:
-                st.json(result)
-                st.success("Discovery completed.")
-                next_workspace_button("Environment Assessment", "Environment Assessment", "continue_after_discovery")
+                st.success("Discovery completed and persisted.")
+                st.rerun()
+        run=s["runs"].get("discovery")
+        if run and isinstance(run.get("output"),dict):
+            out=run["output"]
+            c1,c2,c3=st.columns(3)
+            dom=out.get("domain")
+            c1.metric("Domain",", ".join(map(str,dom[:2])) if isinstance(dom,list) else str(dom or "Not specified"))
+            c2.metric("Objectives",len(out.get("objectives",[]) if isinstance(out.get("objectives"),list) else []))
+            c3.metric("Requirements",len(out.get("requirements",[]) if isinstance(out.get("requirements"),list) else []))
+            st.markdown("#### Discovery summary")
+            st.info(out.get("summary") or "No summary returned.")
+            sections=[("objectives","Business objectives"),("processes","Processes / use cases"),("actors","Actors / stakeholders"),("systems","Systems"),("sources","Data sources"),("requirements","Requirements"),("assumptions","Assumptions"),("unknowns","Unknowns"),("next_steps","Next steps")]
+            cols=st.columns(3)
+            for i,(key,title) in enumerate(sections):
+                with cols[i%3]:
+                    st.markdown(f"#### {title}")
+                    render_structured_value(out.get(key,[]) or ["Not provided"],max_items=7)
+            tp=out.get("target_platform_direction") or "Not specified"
+            ts=out.get("target_platform_status") or "customer_stated_direction"
+            st.markdown("#### Target platform direction")
+            st.info(f"**{tp}** · {str(ts).replace('_',' ').title()} — customer direction only; provisioning/verification happens later in Platform Workspace.")
+            with st.expander("Discovery JSON / traceability",expanded=False): st.json(out)
+            next_workspace_button("Environment Assessment","Environment Assessment","continue_after_discovery")
+
 
 elif page == "Environment Assessment":
     st.subheader("Environment Assessment")
-    st.caption("This stage determines the customer's discovered environment and performs only applicable platform-specific capability checks.")
+    st.caption("This stage separates customer-stated target direction from verified customer-environment evidence. The C INVENT POC adapter is never used as customer evidence.")
     if not s["discovery"]:
         gate_message("Run Discovery first.")
+        next_workspace_button("AI Discovery","AI Discovery","back_to_discovery_from_environment")
     else:
-        d = s["runs"]["discovery"]
-        st.json(d.get("output") if d else {})
-        st.markdown("### Target decision vs. environment provisioning")
-        st.caption("Discovery captures what the customer wants or is considering. It does not provision the target. Architecture selects the governed target; Platform Workspace then connects an existing environment or executes an approved provisioning/IaC plan.")
-        if st.button("Run Environment Assessment", type="primary"):
+        d=s["runs"].get("discovery")
+        if d:
+            dout=d.get("output") or {}
+            st.markdown("#### Discovery target direction")
+            st.info(f"{dout.get('target_platform_direction') or 'Not specified'} · {str(dout.get('target_platform_status') or 'customer_stated_direction').replace('_',' ').title()}")
+        if st.button("Run Environment Assessment",type="primary"):
             with st.spinner("Evaluating environment and applicable capabilities..."):
-                result = orch.run_environment_assessment(project["id"])
-            if isinstance(result, dict) and result.get("error"):
-                st.error(result["error"])
+                result=orch.run_environment_assessment(project["id"])
+            if isinstance(result,dict) and result.get("error"): st.error(result["error"])
             else:
-                st.json(result)
-                st.success("Environment Assessment completed and linked to Current-State Assessment.")
-                st.markdown("#### What this assessment actually proves")
-                status = result.get("target_platform_status", "unknown")
-                target = result.get("target_platform", "Unknown / to be confirmed")
-                if status == "customer_stated_direction":
-                    st.warning(f"Customer target direction: {target}. This is NOT a provisioned customer environment. The Databricks connection visible in this POC is a C INVENT control/test adapter and is not counted as customer evidence.")
-                elif status == "selected_not_provisioned":
-                    st.warning(f"Target selected: {target}, but the customer environment is NOT yet provisioned or verified. Use Platform Workspace to connect or provision it after architecture approval.")
-                else:
-                    st.info("Customer-environment capability evidence is shown only when the target is explicitly selected and an existing/provisioned environment is being verified.")
-                st.caption("Environment Assessment separates customer target intent, customer-environment evidence, and C INVENT's own POC/control-plane connectivity.")
-                st.info("Environment evidence is now persisted for this project. The next gate is Current-State Assessment, which consumes this exact Environment Assessment result.")
-                if st.button("Continue to Current-State Assessment →", key="continue_after_environment", type="primary", use_container_width=True):
-                    st.session_state.active_page = "Assessment"
-                    st.rerun()
+                st.success("Environment Assessment completed and persisted.")
+                st.rerun()
+        run=s["runs"].get("environment")
+        if run and isinstance(run.get("output"),dict):
+            out=run["output"]
+            status=out.get("target_platform_status") or "unknown"
+            target=out.get("target_platform") or "Unknown / to be confirmed"
+            if status in {"customer_stated_direction","selected_not_provisioned"}: st.warning(f"Target direction: {target}. Customer environment is not yet provisioned/verified.")
+            elif status=="provisioned_verified": st.success(f"Customer environment verified for {target}.")
+            else: st.info(f"Environment status: {str(status).replace('_',' ').title()}")
+            c1,c2,c3=st.columns(3)
+            c1.metric("Target",target); c2.metric("Status",str(status).replace('_',' ').title()); c3.metric("Provisioning path",str(out.get("provisioning_path") or "Not selected").replace('_',' ').title())
+            st.markdown("#### Environment evidence")
+            sections=[("current_environment","Current environment"),("data_sources","Data sources"),("processing","Processing"),("analytics_and_reporting","Analytics & reporting"),("governance","Governance"),("security","Security"),("capabilities","Applicable capabilities"),("gaps","Gaps / unknowns")]
+            cols=st.columns(2)
+            for i,(key,title) in enumerate(sections):
+                with cols[i%2]:
+                    st.markdown(f"#### {title}")
+                    render_structured_value(out.get(key,[]) or ["Not provided"],max_items=8)
+            with st.expander("Environment Assessment JSON / traceability",expanded=False): st.json(out)
+            next_workspace_button("Current-State Assessment","Assessment","continue_after_environment")
+
 
 elif page == "Assessment":
     st.subheader("Current-State Assessment")
@@ -702,22 +831,19 @@ elif page == "Assessment":
                             st.write("⚠ " + str(item))
                     if d.get("capabilities"):
                         st.markdown("**Verified platform capability evidence**")
-                        st.json(d.get("capabilities"))
+                        render_structured_value(d.get("capabilities"),max_items=10)
 
             st.markdown("### Risks, assumptions and unknowns")
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.markdown("**Risks / blockers**")
-                for x in out.get("risks", []) or ["None recorded"]:
-                    st.write("• " + str(x))
+                render_structured_value(out.get("risks", []) or ["None recorded"], max_items=8)
             with c2:
                 st.markdown("**Assumptions**")
-                for x in out.get("assumptions", []) or ["None recorded"]:
-                    st.write("• " + str(x))
+                render_structured_value(out.get("assumptions", []) or ["None recorded"], max_items=8)
             with c3:
                 st.markdown("**Unknowns**")
-                for x in out.get("unknowns", []) or ["None recorded"]:
-                    st.write("• " + str(x))
+                render_structured_value(out.get("unknowns", []) or ["None recorded"], max_items=8)
 
             st.markdown("### Recommended next actions")
             for x in out.get("recommended_next_actions", []):
@@ -762,7 +888,7 @@ elif page == "Solution Blueprint":
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Architecture recommendation", recommended)
                 c2.metric("Top fit", f'{rec["fit_score"]:.1f}%')
-                c3.metric("Relative recommendation share", f'{rec["relative_share"]:.1f}%')
+                c3.metric("Selection likelihood (heuristic)", f'{rec.get("selection_likelihood", rec.get("relative_share", 0.0)):.1f}%')
                 st.info(f"Why {recommended}: " + ("; ".join(rec.get("reasons", [])) or "best normalized fit to the current evidence."))
 
             options = [""] + SUPPORTED_PLATFORMS
@@ -776,7 +902,7 @@ elif page == "Solution Blueprint":
                 st.caption(f'{meta["type"]} · Supported clouds: {", ".join(meta["clouds"])} · Endpoint hint: {meta["endpoint_hint"]}')
                 chosen_eval = selected_platform_evaluation(rows, selected)
                 if chosen_eval:
-                    st.write(f'**Selected platform fit:** {chosen_eval["fit_score"]:.1f}% · **Relative share:** {chosen_eval["relative_share"]:.1f}%')
+                    st.write(f'**Selected platform fit:** {chosen_eval["fit_score"]:.1f}% · **Selection likelihood (heuristic):** {chosen_eval.get("selection_likelihood", chosen_eval.get("relative_share", 0.0)):.1f}%')
 
             if st.button("Confirm Final Platform Decision", type="primary", disabled=not bool(selected)):
                 cfg = dict(existing_cfg)
@@ -810,19 +936,7 @@ elif page == "Solution Blueprint":
                     value = out.get(key)
                     if value:
                         st.markdown(f"#### {title}")
-                        if isinstance(value, dict):
-                            for k, v in value.items():
-                                st.markdown(f"**{str(k).replace('_',' ').title()}**")
-                                if isinstance(v, list):
-                                    for item in v:
-                                        st.write("• " + str(item))
-                                else:
-                                    st.write(v)
-                        elif isinstance(value, list):
-                            for item in value:
-                                st.write("• " + str(item))
-                        else:
-                            st.write(value)
+                        render_structured_value(value, max_items=12)
                 with st.expander("Raw JSON / traceability", expanded=False):
                     st.json(out)
 
@@ -858,8 +972,23 @@ elif page == "Platform Workspace":
         mode_options = ["", "existing", "provision"]
         mode = st.selectbox("Customer environment path", mode_options, index=(mode_options.index(cfg.get("environment_mode")) if cfg.get("environment_mode") in mode_options else 0), format_func=lambda x: "Select path..." if not x else ("Connect existing customer environment" if x == "existing" else "Provision via approved cloud / IaC plan"))
     st.markdown("### 2. Engineer-provided environment settings")
-    endpoint = st.text_input("Customer platform endpoint / account URL", value=cfg.get("endpoint", ""), placeholder="Paste the customer endpoint; C INVENT will auto-detect the platform where possible")
-    credential_ref = st.text_input("Credential reference (secret NAME only)", value=cfg.get("credential_ref", ""), placeholder="Example: CINVENT_CUSTOMER_DATABRICKS_HOST,CINVENT_CUSTOMER_DATABRICKS_TOKEN", help="Do not paste a token or password. Reference the secret names configured in the deployment environment.")
+    st.caption("Fields are generated from the selected platform and deployment path. C INVENT stores references and configuration metadata only; secret values are never entered or persisted in the project.")
+    field_mode = mode or "existing"
+    field_defs = environment_fields(field_mode)
+    values = {}
+    # Existing customer environment: endpoint + customer credential reference.
+    # Provisioning path: customer cloud scope + region/environment + provisioning identity.
+    for key, meta in field_defs.items():
+        label = meta["label"] + (" *" if meta.get("required") else "")
+        current_value = cfg.get(key, "")
+        if meta.get("options"):
+            opts = [""] + meta["options"]
+            idx = opts.index(current_value) if current_value in opts else 0
+            values[key] = st.selectbox(label, opts, index=idx, key=f"platform_{key}")
+        else:
+            values[key] = st.text_input(label, value=current_value, placeholder=meta.get("placeholder", ""), help=meta.get("help", ""), key=f"platform_{key}")
+    endpoint = values.get("endpoint", cfg.get("endpoint", ""))
+    credential_ref = values.get("credential_ref", cfg.get("credential_ref", ""))
     detected = detect_platform(endpoint, platform) if endpoint else ""
     if detected:
         if platform and detected != platform and platform != "Other":
@@ -867,7 +996,14 @@ elif page == "Platform Workspace":
         else:
             st.success(f"Auto-detected platform: {detected}")
     if st.button("Save Platform Configuration", type="primary"):
-        cfg.update({"platform": platform, "cloud": cloud, "environment_mode": mode, "endpoint": endpoint.strip(), "credential_ref": credential_ref.strip(), "decision_status": "selected" if platform else "not_selected", "updated_at": store.now()})
+        required_missing = [meta["label"] for key, meta in field_defs.items() if meta.get("required") and not str(values.get(key, "")).strip()]
+        if required_missing:
+            st.error("Complete the required environment settings: " + ", ".join(required_missing))
+            st.stop()
+        cfg.update({"platform": platform, "cloud": cloud, "environment_mode": mode, "endpoint": str(values.get("endpoint", "")).strip(), "credential_ref": str(values.get("credential_ref", "")).strip(), "decision_status": "selected" if platform else "not_selected", "updated_at": store.now()})
+        for key, value in values.items():
+            if key not in ("endpoint", "credential_ref"):
+                cfg[key] = str(value).strip() if isinstance(value, str) else value
         store.save_platform_config(project["id"], cfg)
         store.add_audit(project["id"], "platform:configuration", "success", json.dumps({k:cfg.get(k) for k in ("platform","cloud","environment_mode","endpoint","credential_ref","decision_status")}))
         st.success("Platform configuration saved. C INVENT recalculated the onboarding state.")
@@ -919,15 +1055,26 @@ elif page == "Metadata":
     elif not s["architecture"]:
         gate_message("Generate Architecture first.")
     else:
-        if st.button("Execute metadata.generate", type="primary"): 
+        if st.button("Execute metadata.generate", type="primary", disabled=bool(s.get("metadata"))):
             with st.spinner("Building canonical metadata..."):
                 result = orch.run_metadata(project["id"])
             if isinstance(result, dict) and result.get("error"):
                 st.error(result["error"])
             else:
-                st.json(result)
-                st.success("Metadata generated.")
-                next_workspace_button("Engineering Factory", "Engineering Factory", "continue_after_metadata")
+                st.success("Metadata generated and persisted.")
+                if result.get("ai_enrichment") == "not_available_for_this_run":
+                    st.warning("Capgemini metadata enrichment timed out. A deterministic metadata skeleton was persisted so the delivery lifecycle is not blocked. Complete the source inventory before implementation-level mappings are generated.")
+                st.rerun()
+        metadata_run = s["runs"].get("metadata")
+        if metadata_run and isinstance(metadata_run.get("output"), dict):
+            metadata_out = metadata_run["output"]
+            if metadata_out.get("ai_enrichment") == "not_available_for_this_run":
+                st.warning("Metadata is available as an evidence-safe deterministic skeleton; AI enrichment can be retried later without losing the persisted lifecycle state.")
+            else:
+                st.success("Canonical metadata generated from the approved evidence chain.")
+            with st.expander("Metadata / traceability", expanded=False):
+                st.json(metadata_out)
+            next_workspace_button("Engineering Factory", "Engineering Factory", "continue_after_metadata")
 
 elif page == "Engineering Factory":
     st.subheader("AI Engineering Factory")

@@ -1,6 +1,6 @@
 app:
   name: C INVENT
-  version: 0.1.20-final-fix
+  version: 0.1.20-final-fix-5
   environment: poc
 llm:
   base_url: https://api.generative.engine.capgemini.com/v2/llm/invoke

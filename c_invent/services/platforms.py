@@ -21,6 +21,31 @@ PLATFORM_CATALOG = {
 
 SUPPORTED_PLATFORMS = list(PLATFORM_CATALOG)
 
+# Metadata-driven environment input model. These are labels/help only; secret values are
+# never persisted. Existing-environment verification needs an endpoint and secret reference.
+# Provisioning needs the customer cloud/resource context instead of an endpoint.
+ENVIRONMENT_FIELDS = {
+    "existing": {
+        "endpoint": {"label": "Customer platform endpoint / account URL", "required": True, "placeholder": "https://<customer-endpoint>", "help": "Workspace, account, tenant, or service endpoint used to reach the customer platform."},
+        "credential_ref": {"label": "Credential reference (secret NAME only)", "required": True, "placeholder": "CINVENT_CUSTOMER_<PLATFORM>_CREDENTIAL", "help": "Reference secret name(s) configured in the deployment environment. Never paste a token, password, private key, or client secret here."},
+        "auth_method": {"label": "Authentication method", "required": False, "options": ["OAuth / Service Principal", "OAuth / User", "API Token / PAT (legacy where applicable)", "Customer-managed connection", "Other"]},
+        "environment_name": {"label": "Customer environment name", "required": False, "placeholder": "Production / Development / UAT"},
+        "region": {"label": "Cloud region", "required": False, "placeholder": "e.g. Azure East US 2"},
+    },
+    "provision": {
+        "account_scope": {"label": "Customer cloud account / subscription / project", "required": True, "placeholder": "Customer subscription, AWS account, or GCP project ID", "help": "The customer-owned cloud scope where C INVENT is authorized to provision resources."},
+        "region": {"label": "Target cloud region", "required": True, "placeholder": "e.g. East US 2"},
+        "environment_name": {"label": "Environment name", "required": True, "placeholder": "Development / Test / Production"},
+        "credential_ref": {"label": "Provisioning credential reference (secret NAME only)", "required": True, "placeholder": "CINVENT_CUSTOMER_<CLOUD>_PROVISIONER", "help": "Reference the customer-managed deployment identity/secret. Never paste credentials."},
+        "iac_repository": {"label": "IaC / deployment repository", "required": False, "placeholder": "https://git.example.com/customer/platform-iac"},
+        "network_context": {"label": "Network / connectivity context", "required": False, "placeholder": "VNet/VPC, private endpoints, VPN/ExpressRoute details"},
+    },
+}
+
+def environment_fields(mode):
+    return ENVIRONMENT_FIELDS.get(mode or "existing", {})
+
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()

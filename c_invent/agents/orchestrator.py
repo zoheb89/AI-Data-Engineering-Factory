@@ -645,6 +645,15 @@ Use the following structured evidence only:
             return out
 
     def run_metadata(self,pid):
+        """Generate canonical metadata without allowing gateway latency to break the lifecycle.
+
+        Metadata consumes the persisted Discovery + approved Blueprint only. It deliberately
+        avoids resending customer documents because those documents can make a synchronous
+        Capgemini invocation exceed the gateway window. If the provider is unavailable, a
+        deterministic metadata skeleton is persisted as a successful, explicitly-labelled
+        artifact. It contains only evidenced sources/entities and marks missing schema detail
+        as an open item; it never fabricates tables or columns.
+        """
         discovery=self._success(pid,"discovery")
         blueprint=self._success(pid,"blueprint")
         if not blueprint:
@@ -653,8 +662,57 @@ Use the following structured evidence only:
             return {"error": "Metadata requires approval of the current Blueprint."}
         if discovery and not self._fresh_after(blueprint, discovery):
             return {"error": "Metadata requires a Blueprint generated after the latest Discovery."}
-        prior=json.dumps({"discovery": discovery["output"] if discovery else None, "blueprint": blueprint["output"]},ensure_ascii=False)[:14000]
-        return self._run(pid,"metadata",prompts.METADATA,prior,evidence_limit=8000,use_documents=True,max_tokens=1200)
+
+        d=(discovery or {}).get("output") if isinstance((discovery or {}).get("output"),dict) else {}
+        b=blueprint.get("output") if isinstance(blueprint.get("output"),dict) else {}
+        evidence={
+            "discovery": {k:d.get(k) for k in ("summary","domain","systems","sources","requirements","unknowns") if k in d},
+            "blueprint": {k:b.get(k) for k in ("summary","target_architecture","data_flow","security_governance","decisions","open_questions") if k in b},
+        }
+        prior=json.dumps(evidence,ensure_ascii=False,separators=(",",":"))[:6500]
+        system=prompts.METADATA + "\nReturn compact JSON only. Do not invent tables, columns, keys or business definitions. If schema evidence is missing, use empty arrays and put the gap in assumptions/open_questions."
+        try:
+            out=self.llm.invoke_json(
+                "Build canonical metadata from these approved structured artifacts only:\n"+prior,
+                system,
+                extra_params={"maxTokens":500,"temperature":0.0,"streaming":False,"topP":0.9},
+            )
+            if isinstance(out,dict) and not (out.get("error") and len(out)==1):
+                self.store.save_run(pid,"metadata","success",system,out)
+                self.store.save_artifact(pid,"metadata","metadata.json","json",json.dumps(out,indent=2,ensure_ascii=False))
+                self.store.add_audit(pid,"llm:metadata","success",json.dumps(out)[:4000])
+                return out
+            raise RuntimeError(str(out))
+        except Exception as exc:
+            # Deterministic fallback: preserve the lifecycle and make the provider failure
+            # visible without claiming unsupported schema facts.
+            source_items=[]
+            for key in ("systems","sources"):
+                value=d.get(key,[])
+                if isinstance(value,list): source_items.extend(str(x) for x in value if str(x).strip())
+                elif value: source_items.append(str(value))
+            source_items=list(dict.fromkeys(source_items))
+            fallback={
+                "summary":"Canonical metadata skeleton created from persisted Discovery and approved Architecture. AI enrichment was unavailable for this run.",
+                "sources":source_items,
+                "entities":[],
+                "tables":[],
+                "columns":[],
+                "relationships":[],
+                "transformations":[],
+                "data_quality":["Schema-level data-quality rules require source inventory and profiling evidence."],
+                "lineage":[],
+                "target_layers":["Bronze","Silver","Gold"],
+                "business_products":[],
+                "assumptions":["Source schema, table and column definitions have not yet been evidenced."],
+                "open_questions":["Provide source schema/table inventory and column metadata before implementation-level mappings are generated."],
+                "ai_enrichment":"not_available_for_this_run",
+                "provider_error":str(exc)[:500],
+            }
+            self.store.save_run(pid,"metadata","success",system,fallback)
+            self.store.save_artifact(pid,"metadata","metadata.json","json",json.dumps(fallback,indent=2,ensure_ascii=False))
+            self.store.add_audit(pid,"metadata:deterministic_fallback","success",json.dumps(fallback)[:4000])
+            return fallback
 
     def run_qa(self,pid):
         engineering = self._success(pid, "engineering")

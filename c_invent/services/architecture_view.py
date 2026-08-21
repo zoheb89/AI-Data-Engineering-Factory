@@ -8,6 +8,7 @@ the scoring engine is generic and deterministic.
 from __future__ import annotations
 
 import re
+import math
 from typing import Any, Dict, Iterable, List
 
 from .platforms import PLATFORM_CATALOG, SUPPORTED_PLATFORMS, normalize_platform
@@ -142,12 +143,17 @@ def platform_fit(discovery: Dict[str, Any] | None = None,
             "components": components,
             "reasons": reasons,
         })
-    total = sum(max(0.001, r["raw_score"]) for r in rows)
     rows.sort(key=lambda r: r["raw_score"], reverse=True)
-    for rank, row in enumerate(rows, 1):
+    # A softmax converts small fit differences into an intuitive comparison signal.
+    # This is deliberately labelled a heuristic: it is not a forecast of customer behavior.
+    temperature = 0.07
+    exps = [math.exp((r["raw_score"] - rows[0]["raw_score"]) / temperature) for r in rows]
+    exp_total = sum(exps) or 1.0
+    for rank, (row, exp_value) in enumerate(zip(rows, exps), 1):
         row["rank"] = rank
         row["fit_score"] = round(row["raw_score"] * 100, 1)
-        row["relative_share"] = round((row["raw_score"] / total) * 100, 1)
+        row["relative_share"] = round((row["raw_score"] / sum(max(0.001, x["raw_score"]) for x in rows)) * 100, 1)
+        row["selection_likelihood"] = round((exp_value / exp_total) * 100, 1)
         row["recommendation"] = "Strong candidate" if rank == 1 else ("Viable alternative" if rank <= 3 else "Lower fit for current evidence")
     return rows
 

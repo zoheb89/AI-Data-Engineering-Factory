@@ -4,8 +4,25 @@ import streamlit as st
 def inject_css():
     st.markdown("""
     <style>
+    /* C INVENT visual system: keep headings, controls, cards and navigation on one font scale. */
+    html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+    }
+    .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
+    .stApp p, .stApp label, .stApp [data-testid="stMarkdownContainer"],
+    .stApp button, .stApp input, .stApp textarea, .stApp select {
+        font-family: inherit !important;
+    }
+    .stApp h1{font-size:2rem !important;line-height:1.15 !important;font-weight:800 !important;letter-spacing:-.02em !important}
+    .stApp h2{font-size:1.45rem !important;line-height:1.2 !important;font-weight:800 !important}
+    .stApp h3{font-size:1.12rem !important;line-height:1.25 !important;font-weight:800 !important}
+    .stApp h4{font-size:.98rem !important;line-height:1.3 !important;font-weight:750 !important}
+    .stApp p, .stApp li, .stApp label, .stApp .stCaption{font-size:.90rem;line-height:1.45}
+    .stApp .stButton button{font-size:.88rem !important;font-weight:700 !important;line-height:1.2 !important}
+    [data-testid="stSidebar"] button{font-size:.84rem !important;font-weight:650 !important}
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p{font-size:.82rem;line-height:1.35}
     .hero{padding:1.2rem 1.5rem;border:1px solid #e5e7eb;border-radius:18px;background:linear-gradient(135deg,#fff,#f7f8fa);margin-bottom:1.2rem}
-    .hero h1{font-size:2rem;margin:.2rem 0}.hero p{color:#6b7280;margin:0}
+    .hero h1{font-size:2rem !important;margin:.2rem 0 !important}.hero p{color:#6b7280;margin:0}
     .eyebrow{font-size:.72rem;letter-spacing:.12em;font-weight:700;color:#ff3621}
     [data-testid="stMetric"]{border:1px solid #e5e7eb;padding:.7rem;border-radius:12px}
 
