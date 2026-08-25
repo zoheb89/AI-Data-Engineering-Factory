@@ -163,10 +163,15 @@ def derive_state(config):
         return {"state": "ENDPOINT_REQUIRED", "label": "Customer endpoint required", "next_action": "Enter the customer platform endpoint; C INVENT will auto-detect where possible.", "detected_platform": detected}
     if mode == "existing" and detected and platform != detected and platform != "Other":
         return {"state": "PLATFORM_MISMATCH", "label": "Endpoint does not match selected platform", "next_action": f"Confirm the selected platform ({platform}) or correct the endpoint.", "detected_platform": detected}
-    if mode == "existing" and not secret["configured"]:
-        return {"state": "CREDENTIALS_REQUIRED", "label": "Referenced customer secret is not available", "next_action": f"Add the secret named {credential_ref or '<SECRET_NAME>'} to the deployment environment, then save and verify connectivity.", "detected_platform": detected}
+    # A previously verified customer environment remains a persisted evidence state
+    # even if the deployment secret is temporarily unavailable after a process restart.
+    # Mutation/execution controls still require the live secret, so this does not grant
+    # access to Databricks; it only preserves the lifecycle evidence gate.
+    snapshot = c.get("verification_snapshot") or {}
     if mode == "existing" and verified:
         return {"state": "VERIFIED", "label": "Customer platform verified", "next_action": "Refresh Environment Assessment to persist the verified capability evidence.", "detected_platform": detected}
+    if mode == "existing" and not secret["configured"]:
+        return {"state": "CREDENTIALS_REQUIRED", "label": "Referenced customer secret is not available", "next_action": f"Add the secret named {credential_ref or '<SECRET_NAME>'} to the deployment environment, then save and verify connectivity.", "detected_platform": detected}
     if mode == "existing":
         return {"state": "READY_TO_VERIFY", "label": "Customer platform is ready to verify", "next_action": "Run platform verification using the customer credential reference.", "detected_platform": detected}
     if mode == "provision":

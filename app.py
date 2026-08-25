@@ -21,8 +21,11 @@ secret_value = platform_service.secret_value
 environment_fields = getattr(platform_service, "environment_fields", lambda mode: {})
 from c_invent.services.action_registry import next_action_spec, applicable_actions, action_context
 from c_invent.services.architecture_view import platform_fit, architecture_model, selected_platform_evaluation
+from c_invent.services.poc_validation import detect_infinitespl
+from c_invent.services.synthetic_lab import generate_sources, run_local_pipeline, databricks_notebook, build_download_bundle, PROFILE
+from c_invent.services.universal_intake import analyze_intake, build_intake_bundle
 
-st.set_page_config(page_title="C INVENT", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="EliteInteliA Intelligence Factory", page_icon="✦", layout="wide")
 inject_css()
 
 st.markdown("""
@@ -361,10 +364,10 @@ def evidence_scope_cards():
 
 
 def workspace_roles():
-    st.markdown("### How C INVENT is separated")
+    st.markdown("### How EliteInteliA is separated")
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.markdown("**CONTROL PLANE**")
+        st.markdown("**INTELLIGENCE CONTROL PLANE**")
         st.caption("Control and governance")
         st.write("Owns project identity, lifecycle state, evidence lineage, readiness gates, approvals, audit and the next-action recommendation. It does not perform the stage work.")
     with c2:
@@ -372,14 +375,14 @@ def workspace_roles():
         st.caption("Stage execution")
         st.write("Performs Intake, Discovery, Environment Assessment, Current-State Assessment, Architecture, Metadata, Engineering and Validation. Each stage consumes upstream evidence and creates artifacts/runs.")
     with c3:
-        st.markdown("**PLATFORM WORKSPACE**")
+        st.markdown("**PLATFORM & CONSUMPTION**")
         st.caption("Target-platform execution")
         st.write("Handles Databricks, Lakebase, Apps and AI/BI implementation/consumption. Mutations stay behind validation, approval and the deployment gate.")
     st.caption("Flow: Customer evidence → Delivery Workspace stage → persisted artifact/evidence → Control Plane gate → next Workspace. The Control Plane coordinates; it does not duplicate execution.")
 
 
 # Workspace/project bootstrap.
-# C INVENT never creates an "Untitled Customer Project" automatically.
+# EliteInteliA never creates an "Untitled Customer Project" automatically.
 # Existing legacy placeholders are migrated to a neutral, editable project name.
 store.migrate_untitled_projects()
 projects = store.list_projects()
@@ -388,16 +391,16 @@ if "project_id" not in st.session_state or not any(p["id"] == st.session_state.p
     st.session_state.project_id = projects[0]["id"] if projects else None
 
 with st.sidebar:
-    st.markdown("# 🧠 C INVENT")
-    st.caption(f"Enterprise AI Delivery Factory · {settings.app_version}")
+    st.markdown("""<div class="brand-lockup"><div class="brand-mark">E</div><div><div class="brand-name">EliteInteliA</div><div class="brand-sub">INTELLIGENCE FACTORY</div></div></div>""", unsafe_allow_html=True)
+    st.caption(f"Enterprise Data & AI Intelligence Factory · {settings.app_version}")
 
-    if st.button("＋ New Customer Project", use_container_width=True):
+    if st.button("＋ New Engagement", use_container_width=True):
         st.session_state.show_new_project = True
 
     if st.session_state.get("show_new_project"):
-        st.markdown("#### Create customer project")
+        st.markdown("#### Create new engagement")
         with st.form("new_customer_project", clear_on_submit=True):
-            new_name = st.text_input("Customer / project name", placeholder="e.g. Weqayah Medical Centre")
+            new_name = st.text_input("Customer / engagement name", placeholder="e.g. Weqayah Medical Centre")
             new_domain = st.text_input("Business domain", placeholder="e.g. Healthcare")
             new_intent = st.text_area("Business intent", height=110, placeholder="What does the customer want to achieve?")
             fc1, fc2 = st.columns(2)
@@ -434,7 +437,7 @@ with st.sidebar:
     if projects:
         labels = {p["id"]: f'{p["name"]} · {p["id"][:8]}' for p in projects}
         current = st.session_state.project_id if st.session_state.project_id in labels else next(iter(labels))
-        selected = st.selectbox("Customer Project", list(labels), format_func=lambda x: labels[x], index=list(labels).index(current))
+        selected = st.selectbox("Engagement", list(labels), format_func=lambda x: labels[x], index=list(labels).index(current))
         if selected != st.session_state.project_id:
             st.session_state.project_id = selected
             st.rerun()
@@ -448,11 +451,12 @@ with st.sidebar:
                 st.session_state.active_page = target
                 st.rerun()
 
-        st.markdown("**CONTROL PLANE**")
+        st.markdown("**INTELLIGENCE CONTROL PLANE**")
         st.caption("Governance, gates, approvals, evidence and execution control")
         nav_button("⌂ Command Center", "Command Center")
         nav_button("✓ QA & Traceability", "QA & Traceability")
         nav_button("▣ Audit", "Audit")
+        nav_button("🧪 Synthetic Enterprise Lab", "Synthetic Enterprise Lab")
         nav_button("⚙ AI Connectivity", "AI Connectivity")
 
         st.markdown("**DELIVERY WORKSPACE**")
@@ -471,7 +475,7 @@ with st.sidebar:
                 st.session_state.active_page = STAGE_PAGES[stage_key]
                 st.rerun()
 
-        st.markdown("**PLATFORM WORKSPACE**")
+        st.markdown("**PLATFORM & CONSUMPTION**")
         st.caption("Target-platform implementation and consumption")
         nav_button("Platform Factory", "Platform Factory")
         nav_button("Lakebase & Apps", "Lakebase & Apps")
@@ -489,7 +493,7 @@ project = store.get_project(st.session_state.project_id)
 s = state(project["id"])
 
 st.markdown(
-    f'''<div class="hero"><span class="eyebrow">ENTERPRISE AI DELIVERY FACTORY</span><h1>{project["name"]}</h1><p>{project.get("description") or "Turn business intent into a governed, tested, deployable data product."}</p></div>''',
+    f'''<div class="hero"><span class="eyebrow">ELITEINTELIA · ENTERPRISE DATA & AI</span><h1>{project["name"]}</h1><p>{project.get("description") or "Turn business intent into a governed, tested, deployable data product."}</p></div>''',
     unsafe_allow_html=True,
 )
 
@@ -540,11 +544,11 @@ if page == "Command Center":
     b1.metric("Target", pcfg.get("platform") or "Not selected")
     b2.metric("Deployment path", pcfg.get("environment_mode") or "Not selected")
     b3.metric("Onboarding state", pst.get("state", "NOT_SELECTED"))
-    b4.metric("C INVENT POC adapter", "Configured" if db.configured else "Not configured")
-    st.caption("The C INVENT POC adapter is control-plane/test infrastructure. It is never customer-environment evidence. Customer platform state comes only from the project-owned Platform Workspace configuration and verification.")
+    b4.metric("EliteInteliA POC adapter", "Configured" if db.configured else "Not configured")
+    st.caption("The EliteInteliA POC adapter is control-plane/test infrastructure. It is never customer-environment evidence. Customer platform state comes only from the project-owned Platform Workspace configuration and verification.")
     st.divider()
     st.subheader("Delivery evidence & decision trail")
-    st.caption("Every lifecycle decision is tied to a persisted artifact/run, its evidence source, and the gate it controls. C INVENT does not treat an AI response as proof by itself.")
+    st.caption("Every lifecycle decision is tied to a persisted artifact/run, its evidence source, and the gate it controls. EliteInteliA does not treat an AI response as proof by itself.")
 
     evidence_rows = [
         ("Intake", "Customer intent + source documents", "intake_pack", "intake"),
@@ -649,15 +653,15 @@ if page == "Command Center":
     st.markdown("#### Control Plane vs Workspace")
     cp1, cp2 = st.columns(2)
     with cp1:
-        st.markdown("**CONTROL PLANE**")
+        st.markdown("**INTELLIGENCE CONTROL PLANE**")
         st.write("Owns lifecycle state, evidence lineage, gate decisions, approvals, audit, policy and the recommendation of what happens next.")
     with cp2:
         st.markdown("**DELIVERY WORKSPACE**")
         st.write("Performs the actual stage work: capture documents, run discovery, assess the environment, build architecture, generate metadata and engineering, then validate and deploy.")
 
 elif page == "Intake & Documents":
-    st.subheader("RFI / RFP / RFQ Intake")
-    st.info("Intake captures customer-stated intent and evidence. It does not infer or validate the target platform.")
+    st.subheader("Universal Intake Engine")
+    st.info("Accept a one-line brief, discovery notes, RFI/RFP/RFQ, proposal, SOW, email or mixed attachments. EliteInteliA first builds an evidence-safe intake profile; AI Discovery remains the validation and enrichment step.")
     name = st.text_input("Project name", value=project["name"])
     domain = st.text_input("Business domain", value=project.get("domain") or "Unknown")
     prompt = st.text_area("Customer intent", value=project.get("description") or "", height=150)
@@ -674,6 +678,39 @@ elif page == "Intake & Documents":
                 count += 1
         if count:
             st.success(f"Processed {count} new document(s).")
+
+    if st.button("Analyze Intake — Universal / Domain Agnostic", type="primary", use_container_width=True):
+        docs = store.documents(project["id"])
+        analysis = analyze_intake(project.get("description") or "", docs)
+        store.save_run(project["id"], "universal_intake", "success", project.get("description") or "", analysis)
+        store.save_artifact(project["id"], "universal_intake", "universal_intake_analysis.json", "json", json.dumps(analysis, indent=2, ensure_ascii=False))
+        st.session_state["universal_intake_analysis"] = analysis
+        st.session_state["universal_intake_bundle"] = build_intake_bundle(analysis, docs)
+        st.success("Universal intake analysis completed.")
+
+    analysis = st.session_state.get("universal_intake_analysis")
+    if analysis:
+        st.divider()
+        st.markdown("### Intake profile")
+        c1,c2,c3,c4 = st.columns(4)
+        c1.metric("Evidence files", len(analysis.get("evidence_files", [])))
+        c2.metric("Source families", len(analysis.get("source_families_detected", [])))
+        c3.metric("Requirement signals", len(analysis.get("requirements_signals", [])))
+        c4.metric("Open evidence gaps", len(analysis.get("missing_information", [])))
+        if analysis.get("domain_signals"):
+            st.write("**Domain signals:** " + ", ".join(x["domain"] for x in analysis["domain_signals"]))
+        else:
+            st.write("**Domain signals:** Not established from supplied evidence")
+        st.write("**Candidate use cases:** " + (", ".join(x["use_case"] for x in analysis.get("candidate_use_cases", [])) or "Not established"))
+        st.write("**Source families:** " + (", ".join(analysis.get("source_families_detected", [])) or "Not detected"))
+        st.write("**Target platform direction:** " + analysis.get("target_platform_direction", "unknown"))
+        st.markdown("#### Missing information / discovery questions")
+        render_structured_value(analysis.get("missing_information", []) or ["No obvious evidence gaps detected; Discovery still required."], max_items=12)
+        with st.expander("Evidence-safe intake JSON", expanded=False): st.json(analysis)
+        bundle=st.session_state.get("universal_intake_bundle")
+        if bundle:
+            st.download_button("Download Universal Intake Evidence Pack", bundle, file_name="C_INVENT_Universal_Intake_Evidence_Pack.zip", mime="application/zip", use_container_width=True)
+        st.success("Next: run AI Discovery. Intake signals must not be treated as approved customer facts.")
     st.divider()
     if store.artifact_exists(project["id"], "intake_pack"):
         st.success("Intake Pack exists and is persisted for this project.")
@@ -743,7 +780,7 @@ elif page == "AI Discovery":
 
 elif page == "Environment Assessment":
     st.subheader("Environment Assessment")
-    st.caption("This stage separates customer-stated target direction from verified customer-environment evidence. The C INVENT POC adapter is never used as customer evidence.")
+    st.caption("This stage separates customer-stated target direction from verified customer-environment evidence. The EliteInteliA POC adapter is never used as customer evidence.")
     if not s["discovery"]:
         gate_message("Run Discovery first.")
         next_workspace_button("AI Discovery","AI Discovery","back_to_discovery_from_environment")
@@ -797,7 +834,7 @@ elif page == "Assessment":
     st.caption("Assessment is an evidence-based delivery-readiness gate. It evaluates the business/use case, data and sources, platform/environment, and governance/delivery conditions. It does not treat a platform connection as proof of business readiness, and it does not require Capgemini to complete the gate.")
     evidence_scope_cards()
     if not s["environment"]:
-        gate_message("Run a current Environment Assessment first. Once completed, C INVENT automatically links that persisted evidence to this gate.")
+        gate_message("Run a current Environment Assessment first. Once completed, EliteInteliA automatically links that persisted evidence to this gate.")
     else:
         env_run = s["runs"].get("environment")
         st.success("✓ Environment Assessment linked — current evidence is available to this gate.")
@@ -848,7 +885,7 @@ elif page == "Assessment":
             for key, label in labels.items():
                 d = dims.get(key, {})
                 with st.expander(f"{label} — {d.get('status', 'Unknown')}", expanded=True):
-                    st.markdown(f"**What C INVENT assesses:** {d.get('what_is_assessed', 'Not specified')}")
+                    st.markdown(f"**What EliteInteliA assesses:** {d.get('what_is_assessed', 'Not specified')}")
                     src = d.get("source", [])
                     if src:
                         st.caption("Evidence source: " + " · ".join(src))
@@ -915,7 +952,7 @@ elif page == "Solution Blueprint":
 
             st.divider()
             st.markdown("### Target-platform decision")
-            st.caption("Architecture recommends; the engagement team explicitly confirms. A platform appearing as the strongest candidate does not mean the customer environment is provisioned. C INVENT's POC connection is never used as customer evidence.")
+            st.caption("Architecture recommends; the engagement team explicitly confirms. A platform appearing as the strongest candidate does not mean the customer environment is provisioned. EliteInteliA's POC connection is never used as customer evidence.")
             rows = out.get("platform_evaluation") or platform_fit({}, {}, out)
             if rows:
                 recommended = rows[0]["platform"]
@@ -982,7 +1019,7 @@ elif page == "Solution Blueprint":
                 st.warning("Human approval required before Metadata and Engineering.")
                 if st.checkbox("I approve this architecture for Metadata and Engineering"):
                     if st.button("Record Architecture Approval", type="primary"):
-                        store.add_approval(project["id"], "blueprint", "User approved the current C INVENT Architecture/Blueprint.")
+                        store.add_approval(project["id"], "blueprint", "User approved the current EliteInteliA Architecture/Blueprint.")
                         st.success("Architecture approval recorded.")
                         st.rerun()
             if approved:
@@ -990,7 +1027,7 @@ elif page == "Solution Blueprint":
 
 elif page == "Platform Workspace":
     st.subheader("Platform Workspace — Target Provisioning & Connection")
-    st.caption("This is the customer-platform boundary. C INVENT is platform-neutral: the project chooses the target, then the engineer supplies environment details. C INVENT detects what it can, generates the next state, and never treats its own POC connection as customer evidence.")
+    st.caption("This is the customer-platform boundary. EliteInteliA is platform-neutral: the project chooses the target, then the engineer supplies environment details. EliteInteliA detects what it can, generates the next state, and never treats its own POC connection as customer evidence.")
     cfg = dict(get_platform_config_safe(project["id"]))
     current = derive_state(cfg)
     st.markdown("### 1. Target platform")
@@ -1007,7 +1044,7 @@ elif page == "Platform Workspace":
         mode_options = ["", "existing", "provision"]
         mode = st.selectbox("Customer environment path", mode_options, index=(mode_options.index(cfg.get("environment_mode")) if cfg.get("environment_mode") in mode_options else 0), format_func=lambda x: "Select path..." if not x else ("Connect existing customer environment" if x == "existing" else "Provision via approved cloud / IaC plan"))
     st.markdown("### 2. Engineer-provided environment settings")
-    st.caption("Fields are generated from the selected platform and deployment path. C INVENT stores references and configuration metadata only; secret values are never entered or persisted in the project.")
+    st.caption("Fields are generated from the selected platform and deployment path. EliteInteliA stores references and configuration metadata only; secret values are never entered or persisted in the project.")
     field_mode = mode or "existing"
     field_defs = environment_fields(field_mode)
     values = {}
@@ -1041,12 +1078,12 @@ elif page == "Platform Workspace":
                 cfg[key] = str(value).strip() if isinstance(value, str) else value
         store.save_platform_config(project["id"], cfg)
         store.add_audit(project["id"], "platform:configuration", "success", json.dumps({k:cfg.get(k) for k in ("platform","cloud","environment_mode","endpoint","credential_ref","decision_status")}))
-        st.success("Platform configuration saved. C INVENT recalculated the onboarding state.")
+        st.success("Platform configuration saved. EliteInteliA recalculated the onboarding state.")
         st.rerun()
 
     cfg = get_platform_config_safe(project["id"])
     current = derive_state(cfg)
-    st.markdown("### 3. C INVENT platform state")
+    st.markdown("### 3. EliteInteliA platform state")
     st.info(f"**{current['state']} — {current['label']}**\n\nNext action: {current['next_action']}")
     if cfg.get("platform") and cfg.get("environment_mode") == "existing":
         sec = secret_status(cfg)
@@ -1069,7 +1106,7 @@ elif page == "Platform Workspace":
         with st.expander("View platform plan / evidence", expanded=True):
             st.json(cfg["provisioning_plan"])
     if current["state"] == "READY_TO_VERIFY":
-        st.info("Verification is available for supported adapters. For Databricks, C INVENT uses the customer endpoint and the referenced customer secret — never the global POC credentials.")
+        st.info("Verification is available for supported adapters. For Databricks, EliteInteliA uses the customer endpoint and the referenced customer secret — never the global POC credentials.")
         if st.button("Verify Customer Platform", type="primary"):
             with st.spinner("Verifying customer platform capabilities..."):
                 result = orch.run_environment_assessment(project["id"])
@@ -1153,18 +1190,77 @@ elif page == "Engineering Factory":
             st.rerun()
         if s["engineering"]:
             st.success("Engineering Pack exists and passed the generation gate.")
+            if detect_infinitespl(project, store.documents(project["id"])):
+                st.markdown("### InfiniteSPL POC Validation")
+                st.caption("Deterministic synthetic validation for the RFI-074 Informatica → Bronze & Gold workload. It validates the engineering mechanics without claiming access to customer SQL Server/Oracle or Fabric production data.")
+                if st.button("Generate InfiniteSPL POC Validation Pack", key="generate_infinitespl_validation", use_container_width=True):
+                    with st.spinner("Building the synthetic 250-table / 11-database Databricks validation harness..."):
+                        result = orch.run_poc_validation_pack(project["id"])
+                    if result.get("error"):
+                        st.error(result["error"])
+                    else:
+                        st.success("InfiniteSPL synthetic validation pack generated.")
+                        st.json(result.get("manifest", {}))
+                        st.rerun()
+                for a in store.artifacts(project["id"]):
+                    if a["kind"] in {"poc_validation_spec", "poc_validation_manifest", "poc_validation_notebook"}:
+                        with st.expander(f"POC Validation · {a['name']}", expanded=False):
+                            st.code(a["content"], language=a["language"] or "text")
             for a in store.artifacts(project["id"]):
                 if a["kind"].startswith("engineering_") and a["kind"] != "engineering_generation":
                     with st.expander(f"{a['kind']} · {a['name']}"):
                         st.code(a["content"], language=a["language"] or "text")
             next_workspace_button("Validation / QA", "QA & Traceability", "continue_after_engineering")
 
+elif page == "Synthetic Enterprise Lab":
+    st.subheader("Synthetic Enterprise Lab")
+    st.caption("Zero-cost deterministic test harness. It validates EliteInteliA data-engineering mechanics across multiple source families without requiring paid enterprise connectors. Synthetic evidence is clearly separated from customer evidence.")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Source families", len(PROFILE["source_families"]))
+    c2.metric("Test mode", "Synthetic")
+    c3.metric("Customer data", "None")
+    c4.metric("Execution", "Local + Databricks")
+
+    st.markdown("### Test landscape")
+    st.write("CRM · ERP · Support · Documents · IoT / Streaming → Bronze → Silver → Gold → Data Quality → Reconciliation → Consumption")
+    if st.button("Generate & Run Full Synthetic Test", type="primary", use_container_width=True):
+        with st.spinner("Generating synthetic enterprise sources and executing the local end-to-end pipeline..."):
+            sources = generate_sources()
+            result = run_local_pipeline(sources)
+            notebook = databricks_notebook(catalog=(getattr(settings, "db_default_catalog", "main") or "main"))
+            bundle = build_download_bundle(result, sources, notebook)
+            store.save_run(project["id"], "synthetic_enterprise_lab", "success", "Deterministic synthetic enterprise validation", result)
+            store.save_artifact(project["id"], "synthetic_lab_result", "synthetic_enterprise_validation.json", "json", json.dumps(result, indent=2, default=str))
+            store.save_artifact(project["id"], "synthetic_lab_databricks", "cinvent_synthetic_enterprise_lab.py", "python", notebook)
+            st.session_state.synthetic_lab_result = result
+            st.session_state.synthetic_lab_bundle = bundle
+        st.success("Synthetic end-to-end validation completed.")
+
+    result = st.session_state.get("synthetic_lab_result")
+    if result:
+        st.markdown("### Validation result")
+        status = result.get("status", "UNKNOWN")
+        if status.startswith("PASS"):
+            st.success(status)
+        else:
+            st.error(status)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("CRM rows", result["source_counts"].get("crm_customers", 0))
+        c2.metric("ERP orders", result["source_counts"].get("erp_orders", 0))
+        c3.metric("Gold Customer 360", result["gold"]["customer_360_rows"])
+        c4.metric("DQ findings", sum(x["dq_failures"] for x in result["data_quality"]))
+        st.json(result)
+        bundle = st.session_state.get("synthetic_lab_bundle")
+        if bundle:
+            st.download_button("Download Synthetic Enterprise Validation Pack", bundle, file_name="C_INVENT_Synthetic_Enterprise_Validation_Pack.zip", mime="application/zip", use_container_width=True)
+        st.info("Next real-world test: use the generated Databricks notebook in the VERIFIED customer Databricks workspace. After that, replace each synthetic adapter with a real source adapter one at a time.")
+
 elif page == "Platform Factory":
     st.subheader("Platform Factory — Target Platform Execution")
     cfg = get_platform_config_safe(project["id"])
     pst = derive_state(cfg)
     target = normalize_platform(cfg.get("platform")) if cfg.get("platform") else ""
-    st.caption("Execution is generic at the C INVENT control level. A concrete platform adapter is invoked only for the selected customer target; the global POC connector is never used as customer evidence.")
+    st.caption("Execution is generic at the EliteInteliA control level. A concrete platform adapter is invoked only for the selected customer target; the global POC connector is never used as customer evidence.")
     c1, c2, c3 = st.columns(3)
     c1.metric("Customer target", target or "Not selected")
     c2.metric("Onboarding state", pst.get("state", "NOT_SELECTED"))
@@ -1180,7 +1276,7 @@ elif page == "Platform Factory":
     elif not target:
         gate_message("Select and confirm a target platform in Solution Blueprint / Platform Workspace.")
     elif target != "Databricks":
-        st.info(f"C INVENT has no executable {target} mutation adapter in this POC. The platform-neutral lifecycle is ready for the approved adapter/IaC implementation.")
+        st.info(f"EliteInteliA has no executable {target} mutation adapter in this POC. The platform-neutral lifecycle is ready for the approved adapter/IaC implementation.")
         if cfg.get("provisioning_plan"):
             st.json(cfg["provisioning_plan"])
     else:
@@ -1188,7 +1284,7 @@ elif page == "Platform Factory":
         token = secret_value(refs[-1]) if refs else ""
         customer_db = DatabricksClient(settings, host=cfg.get("endpoint"), token=token)
         if pst.get("state") != "VERIFIED" or not customer_db.configured:
-            gate_message("Databricks execution requires a VERIFIED customer environment and a customer-owned credential reference. The C INVENT POC Databricks connection is not used here.")
+            gate_message("Databricks execution requires a VERIFIED customer environment and a customer-owned credential reference. The EliteInteliA POC Databricks connection is not used here.")
         else:
             st.success("Verified customer Databricks environment selected. Execution controls below operate against that customer endpoint.")
             st.json(customer_db.capability_report())
@@ -1196,7 +1292,7 @@ elif page == "Platform Factory":
                 st.json(orch.create_lakeflow(project["id"], customer_db))
             if st.button("Create Lakeflow Job"):
                 st.json(orch.create_job(project["id"], customer_db))
-            if st.button("Run Latest C INVENT Job"):
+            if st.button("Run Latest EliteInteliA Job"):
                 st.json(orch.run_latest_job(project["id"], customer_db))
 
 elif page == "Lakebase & Apps":
@@ -1236,6 +1332,14 @@ elif page == "QA & Traceability":
     if not s["engineering"]:
         gate_message("Validation requires current Engineering output.")
     else:
+        if detect_infinitespl(project, store.documents(project["id"])):
+            st.markdown("### InfiniteSPL Acceptance Validation")
+            st.caption("Run the synthetic harness in the verified Databricks workspace after the engineering pack. Customer-source equivalence remains a separate phase requiring SQL Server/Oracle/Fabric evidence.")
+            pack = store.latest_artifact(project["id"], "poc_validation_notebook")
+            if pack:
+                st.success("InfiniteSPL synthetic validation notebook is ready in EliteInteliA artifacts.")
+            else:
+                st.info("Generate the InfiniteSPL POC Validation Pack from Engineering Factory first.")
         if st.button("Execute validation.run", type="primary"): 
             with st.spinner("Running end-to-end validation..."):
                 result = orch.run_qa(project["id"])
@@ -1253,8 +1357,8 @@ elif page == "QA & Traceability":
 
 elif page == "AI Lab":
     st.subheader("Capgemini GPT-5.1 Test")
-    system = st.text_area("System prompt", value="You are C INVENT, an enterprise solution architect.", height=80)
-    text = st.text_area("Prompt", value="Reply with exactly: C INVENT TEST SUCCESS", height=100)
+    system = st.text_area("System prompt", value="You are EliteInteliA, an enterprise solution architect.", height=80)
+    text = st.text_area("Prompt", value="Reply with exactly: EliteInteliA TEST SUCCESS", height=100)
     if not settings.llm_api_key or not settings.llm_base_url:
         st.warning("Capgemini AI is not configured for this workspace.")
     if st.button("Invoke GPT-5.1", type="primary", disabled=not bool(settings.llm_api_key and settings.llm_base_url)):
@@ -1262,7 +1366,7 @@ elif page == "AI Lab":
             st.json(orch.llm_test(text, system))
 
 elif page == "AI Connectivity":
-    st.subheader("C INVENT → Capgemini AI Connectivity")
+    st.subheader("EliteInteliA → Capgemini AI Connectivity")
     st.caption("This is the POC AI provider configuration. It is independent of the delivery lifecycle.")
     c1, c2 = st.columns(2)
     with c1:
@@ -1279,7 +1383,7 @@ elif page == "AI Connectivity":
         st.info("Workspace ID is intentionally not sent. The verified Capgemini invocation succeeds without it.")
     if st.button("Test Capgemini Connection", type="primary", disabled=not bool(settings.llm_api_key and settings.llm_base_url)):
         with st.spinner("Testing Capgemini GPT-5.1..."):
-            result = orch.llm_test("Reply with exactly: C INVENT TEST SUCCESS", "You are a connectivity test assistant.")
+            result = orch.llm_test("Reply with exactly: EliteInteliA TEST SUCCESS", "You are a connectivity test assistant.")
         if isinstance(result, dict) and result.get("error"):
             st.error("Capgemini connectivity test failed.")
         else:

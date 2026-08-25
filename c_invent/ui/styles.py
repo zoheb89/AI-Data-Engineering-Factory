@@ -4,7 +4,25 @@ import streamlit as st
 def inject_css():
     st.markdown("""
     <style>
-    /* C INVENT visual system: keep headings, controls, cards and navigation on one font scale. */
+    /* EliteInteliA visual system: keep headings, controls, cards and navigation on one font scale. */
+    /* EliteInteliA brand system — premium enterprise intelligence aesthetic. */
+    :root{--eia-ink:#0b1220;--eia-muted:#667085;--eia-line:#e5e7eb;--eia-accent:#10b981;--eia-accent2:#06b6d4;--eia-surface:#ffffff;--eia-soft:#f5f8fa}
+    [data-testid="stSidebar"]{background:linear-gradient(180deg,#07111f 0%,#0b1727 55%,#0f1f30 100%)!important;border-right:1px solid #1e3448}
+    [data-testid="stSidebar"] *{color:#e7eef5!important}
+    [data-testid="stSidebar"] hr{border-color:#294055!important}
+    [data-testid="stSidebar"] .stButton button{background:transparent!important;border:1px solid transparent!important;text-align:left!important;border-radius:10px!important}
+    [data-testid="stSidebar"] .stButton button:hover{background:#13263a!important;border-color:#27435a!important}
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] strong{color:#8ea9bd!important;letter-spacing:.08em;font-size:.72rem!important}
+    .brand-lockup{display:flex;align-items:center;gap:11px;padding:4px 2px 17px;margin-bottom:10px}
+    .brand-mark{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#10b981,#06b6d4);color:#06131d;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;box-shadow:0 7px 20px rgba(6,182,212,.22)}
+    .brand-name{font-size:19px;font-weight:850;letter-spacing:-.03em;color:#fff!important;line-height:1.05}
+    .brand-sub{font-size:8px;letter-spacing:.17em;color:#8ea9bd!important;font-weight:800;margin-top:3px}
+    .hero{background:radial-gradient(circle at 88% 15%,rgba(16,185,129,.13),transparent 27%),linear-gradient(135deg,#07111f 0%,#10283a 62%,#123044 100%)!important;border:1px solid #1e3a4f!important;box-shadow:0 14px 40px rgba(9,30,45,.12)!important;color:#fff!important}
+    .hero h1,.hero p{color:#fff!important}.hero p{color:#b7c8d6!important}.eyebrow{color:#5eead4!important}
+    .stApp .stButton button[kind="primary"]{background:linear-gradient(90deg,#059669,#0891b2)!important;border-color:#059669!important}
+    .stApp .stButton button[kind="primary"] p{color:#fff!important}
+    .stApp [data-testid="stMetric"]{background:#fff;border-color:#dbe4ea;box-shadow:0 3px 12px rgba(9,30,45,.04)}
+
     html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
         font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
     }

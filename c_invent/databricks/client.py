@@ -129,6 +129,12 @@ class DatabricksClient:
         ]
 
     def create_job(self, spec, notebook_sources=None):
+        """Create a Databricks Job only from executable notebook source.
+
+        JSON planning artifacts are never uploaded as Python notebooks. Callers can
+        pass an explicit mapping of task_key -> Python source; otherwise a safe
+        placeholder is used and the response makes that limitation visible.
+        """
         if not self.configured:
             return {"error": "Databricks not configured"}
         notebook_sources = notebook_sources or {}
@@ -137,8 +143,10 @@ class DatabricksClient:
         for task in spec.get("tasks", []):
             key = task["task_key"]
             path = f"{root}/{key}.py"
-            source = notebook_sources.get(key, "# C INVENT generated task\nprint('C INVENT task placeholder')\n")
-            upload = self.import_notebook(path, source)
+            source = notebook_sources.get(key)
+            if not source or not isinstance(source, str):
+                source = "# C INVENT generated task\n# No executable implementation was supplied for this task.\nprint('C INVENT task placeholder')\n"
+            upload = self.import_notebook(path, source, language="PYTHON")
             if upload.get("error"):
                 return {"status": "workspace_upload_failed", "task": key, "upload": upload}
             tasks.append({

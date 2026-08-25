@@ -3,6 +3,7 @@ from c_invent.llm.capgemini import CapgeminiLLM
 from c_invent.services.platforms import normalize_platform, derive_state, secret_status, secret_value
 from c_invent.services.architecture_view import platform_fit, architecture_model
 from c_invent.agents import prompts
+from c_invent.services.poc_validation import build_validation_pack, detect_infinitespl
 
 class Orchestrator:
     def __init__(self, settings, store):
@@ -713,6 +714,26 @@ Use the following structured evidence only:
             self.store.save_artifact(pid,"metadata","metadata.json","json",json.dumps(fallback,indent=2,ensure_ascii=False))
             self.store.add_audit(pid,"metadata:deterministic_fallback","success",json.dumps(fallback)[:4000])
             return fallback
+
+    def run_poc_validation_pack(self, pid):
+        """Create an evidence-safe InfiniteSPL validation harness.
+
+        This is deliberately deterministic: it does not require the LLM and does not
+        claim customer-source equivalence. It gives the engineering team a runnable
+        Databricks synthetic harness when SQL Server/Oracle source access is not yet
+        available.
+        """
+        project = self.store.get_project(pid)
+        docs = self.store.documents(pid)
+        if not detect_infinitespl(project, docs):
+            return {"error": "InfiniteSPL validation profile was not detected. Upload the RFI/POC material or select an InfiniteSPL project."}
+        spec, manifest, notebook = build_validation_pack(project, docs, catalog=(getattr(self.settings, "db_default_catalog", "main") or "main"))
+        self.store.save_artifact(pid, "poc_validation_spec", "infinitespl_validation_spec.json", "json", json.dumps(spec, indent=2, ensure_ascii=False))
+        self.store.save_artifact(pid, "poc_validation_manifest", "infinitespl_validation_manifest.json", "json", json.dumps(manifest, indent=2, ensure_ascii=False))
+        self.store.save_artifact(pid, "poc_validation_notebook", "infinitespl_synthetic_validation.py", "python", notebook)
+        self.store.save_run(pid, "poc_validation", "success", "Deterministic InfiniteSPL POC validation pack", manifest)
+        self.store.add_audit(pid, "poc:infinitespl_validation_pack", "success", json.dumps(manifest)[:5000])
+        return {"status": "SYNTHETIC_VALIDATION_READY", "manifest": manifest, "artifacts": ["infinitespl_validation_spec.json", "infinitespl_validation_manifest.json", "infinitespl_synthetic_validation.py"]}
 
     def run_qa(self,pid):
         engineering = self._success(pid, "engineering")

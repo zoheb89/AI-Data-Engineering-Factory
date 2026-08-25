@@ -1,3 +1,5 @@
+C INVENT 0.1.24 — Universal Intake Engine
+
 # C INVENT — Full POC Build
 
 **Streamlit + Capgemini GPT-5.1 + platform-neutral enterprise delivery control**
@@ -108,3 +110,22 @@ The Control Plane may open the relevant Workspace, but it does not duplicate the
 ## Project creation
 
 Projects are never auto-created on startup. **New Customer Project** requires a customer/project name, domain and optional business intent. Legacy or placeholder `Untitled Customer Project` records are renamed in place without deleting their evidence or history; no Untitled project is created on startup.
+
+
+## InfiniteSPL POC validation mode
+
+The build includes a deterministic **InfiniteSPL RFI-074 validation pack** for the nominated Informatica → Bronze & Gold metadata-driven workload. It is intentionally separate from customer-source evidence.
+
+When the project contains the InfiniteSPL/RFI-074 evidence, Engineering Factory exposes **Generate InfiniteSPL POC Validation Pack**. The pack creates:
+
+- `infinitespl_validation_spec.json` — requirements and acceptance criteria
+- `infinitespl_validation_manifest.json` — proven vs not-yet-proven matrix
+- `infinitespl_synthetic_validation.py` — runnable Databricks notebook that creates a tiny synthetic 250-table / 11-database metadata estate and validates Bronze, Silver, Gold, DQ, reconciliation, hash/merge and idempotent incremental mechanics
+
+Synthetic mode is a validation harness, not a claim that C INVENT has customer SQL Server/Oracle data. Real source connectivity, Fabric-vs-Databricks reconciliation, ADF/SHIR handoff and production performance remain customer-evidence gates.
+
+The Databricks Job creator also no longer uploads JSON planning artifacts as Python notebooks. It accepts explicit executable notebook source only.
+
+## Synthetic Enterprise Lab
+
+C INVENT includes a zero-cost synthetic enterprise validation harness covering CRM, ERP, support, documents and IoT/event sources. It executes locally with deterministic data and generates a Databricks notebook for the same validation pattern. Synthetic validation proves engineering mechanics only; it does not claim customer-source connectivity or production equivalence.
