@@ -183,5 +183,183 @@ def inject_css(theme: str = "System"):
         .arch-target{{margin-top:12px}}
         .arch-flow{{min-width:1000px}}
     }}
+
+    /* ===== EliteInteliA Enterprise UI v0.1.28 ===== */
+    :root{{
+      --eia-brand-cyan:#10a6a6;
+      --eia-brand-blue:#1769e0;
+      --eia-ink:#0a1220;
+      --eia-ink2:#0c1524;
+    }}
+    .stApp{{
+      background:
+        radial-gradient(900px 500px at 85% -10%, color-mix(in srgb,var(--eia-accent) 8%,transparent), transparent 68%),
+        radial-gradient(760px 440px at 0% 100%, color-mix(in srgb,var(--eia-accent2) 6%,transparent), transparent 68%),
+        var(--eia-bg) !important;
+    }}
+    /* Give the Streamlit shell the same restrained enterprise density as the React prototype. */
+    [data-testid="stMainBlockContainer"]{{
+      max-width:1480px !important;
+      padding-top:1.1rem !important;
+      padding-left:2rem !important;
+      padding-right:2rem !important;
+    }}
+    [data-testid="stSidebar"]{{
+      width:264px !important;
+      background:var(--eia-sidebar) !important;
+    }}
+    [data-testid="stSidebar"] > div:first-child{{padding:1rem .75rem !important}}
+    .brand-mark{{
+      width:38px;height:38px;border-radius:11px;
+      background:linear-gradient(135deg,var(--eia-brand-cyan),var(--eia-brand-blue));
+      color:#06131d !important;
+    }}
+    .brand-name{{font-size:16px !important}}
+    .brand-name::first-letter{{font-weight:800}}
+    .brand-sub{{font-size:9px !important;letter-spacing:.23em !important}}
+    /* Sidebar navigation */
+    [data-testid="stSidebar"] .stButton{{margin:.12rem 0 !important}}
+    [data-testid="stSidebar"] .stButton button{{
+      min-height:38px !important;
+      padding:.55rem .75rem !important;
+      border:1px solid transparent !important;
+      border-radius:10px !important;
+      font-size:.84rem !important;
+      font-weight:600 !important;
+      transition:all .15s ease !important;
+      box-shadow:none !important;
+    }}
+    [data-testid="stSidebar"] .stButton button:hover{{
+      background:var(--eia-surface2) !important;
+      border-color:var(--eia-line) !important;
+      transform:none !important;
+    }}
+    [data-testid="stSidebar"] .stButton button[kind="primary"]{{
+      background:linear-gradient(90deg,var(--eia-brand-cyan),var(--eia-brand-blue)) !important;
+      color:#fff !important;
+    }}
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] strong{{
+      font-size:.66rem !important;
+      letter-spacing:.12em !important;
+      color:var(--eia-sidebarMuted) !important;
+    }}
+    /* Header/hero */
+    .hero{{
+      position:relative;
+      padding:1.35rem 1.5rem !important;
+      border-radius:16px !important;
+      background:
+        linear-gradient(135deg,
+          color-mix(in srgb,var(--eia-accent) 8%,var(--eia-surface)),
+          color-mix(in srgb,var(--eia-accent2) 6%,var(--eia-surface))) !important;
+      box-shadow:0 12px 32px var(--eia-shadow) !important;
+    }}
+    .hero::after{{
+      content:"";
+      position:absolute;right:18px;top:18px;width:9px;height:9px;border-radius:50%;
+      background:var(--eia-success);box-shadow:0 0 0 5px color-mix(in srgb,var(--eia-success) 12%,transparent);
+    }}
+    .hero .eyebrow{{color:var(--eia-accent) !important}}
+    /* Cards */
+    .metric-card,.scope-card,.ui-card,.arch-shell,.arch-card{{
+      transition:border-color .15s ease,box-shadow .15s ease,transform .15s ease;
+    }}
+    .metric-card:hover,.scope-card:hover,.ui-card:hover,.arch-card:hover{{
+      border-color:color-mix(in srgb,var(--eia-accent) 28%,var(--eia-line));
+      box-shadow:0 8px 22px var(--eia-shadow);
+      transform:translateY(-1px);
+    }}
+    .metric-card{{
+      min-height:112px !important;
+      padding:15px 16px !important;
+      border-radius:14px !important;
+    }}
+    .metric-label{{
+      font-size:11px !important;text-transform:uppercase;letter-spacing:.04em;
+    }}
+    .metric-value{{font-size:25px !important}}
+    /* Native tabs/expanders/dataframes */
+    [data-baseweb="tab-list"]{{
+      gap:4px !important;border-bottom:1px solid var(--eia-line) !important;
+    }}
+    [data-baseweb="tab"]{{
+      color:var(--eia-muted) !important;font-weight:650 !important;
+    }}
+    [data-baseweb="tab"][aria-selected="true"]{{
+      color:var(--eia-text) !important;
+    }}
+    [data-testid="stExpander"]{{
+      border:1px solid var(--eia-line) !important;
+      border-radius:12px !important;
+      background:var(--eia-surface) !important;
+    }}
+    [data-testid="stDataFrame"]{{
+      border:1px solid var(--eia-line) !important;
+      border-radius:12px !important;
+      overflow:hidden !important;
+    }}
+    /* Status messages */
+    [data-testid="stAlert"]{{
+      border-radius:12px !important;
+      border:1px solid var(--eia-line) !important;
+    }}
+    /* Hide Streamlit chrome that competes with the product shell. */
+    #MainMenu{{visibility:hidden !important}}
+    footer{{visibility:hidden !important}}
+    header[data-testid="stHeader"]{{height:0 !important}}
+    /* Mobile */
+    @media(max-width:900px){{
+      [data-testid="stMainBlockContainer"]{{
+        padding-left:1rem !important;padding-right:1rem !important;
+      }}
+      .hero{{padding:1.05rem 1.1rem !important}}
+    }}
+
+
+    /* ===== EliteInteliA True Unified Product Shell v0.1.29 ===== */
+    .ei-topbar{{
+      display:flex;align-items:center;gap:14px;min-height:58px;margin:0 0 18px;
+      padding:9px 12px;border:1px solid var(--eia-line);border-radius:14px;
+      background:color-mix(in srgb,var(--eia-surface) 92%,transparent);
+      box-shadow:0 8px 26px var(--eia-shadow);backdrop-filter:blur(12px);
+      position:sticky;top:8px;z-index:50;
+    }}
+    .ei-topbar-brand{{display:flex;align-items:center;gap:9px;min-width:230px}}
+    .ei-mini-mark{{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-size:15px;font-weight:900;color:#06131d;background:linear-gradient(135deg,var(--eia-brand-cyan),var(--eia-brand-blue))}}
+    .ei-product-name{{font-size:13px;font-weight:800;color:var(--eia-text);line-height:1.05}}
+    .ei-product-sub{{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--eia-muted);margin-top:3px}}
+    .ei-search{{flex:1;max-width:520px;min-width:180px;height:36px;border:1px solid var(--eia-line);border-radius:10px;background:var(--eia-surface2);display:flex;align-items:center;padding:0 12px;color:var(--eia-muted);font-size:12px}}
+    .ei-search span{{margin-right:8px;font-size:15px}}
+    .ei-top-actions{{margin-left:auto;display:flex;align-items:center;gap:8px}}
+    .ei-pill{{border:1px solid var(--eia-line);background:var(--eia-surface2);border-radius:999px;padding:6px 10px;font-size:10px;font-weight:750;color:var(--eia-muted);white-space:nowrap}}
+    .ei-pill.live{{color:var(--eia-success);border-color:color-mix(in srgb,var(--eia-success) 30%,var(--eia-line));background:var(--eia-accentSoft)}}
+    .ei-avatar{{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:900;color:#06131d;background:linear-gradient(135deg,var(--eia-brand-cyan),var(--eia-brand-blue))}}
+    .ei-context{{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 15px;padding:0 2px}}
+    .ei-breadcrumb{{font-size:11px;color:var(--eia-muted)}}
+    .ei-breadcrumb b{{color:var(--eia-text)}}
+    .ei-status{{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:6px 9px;border-radius:999px;background:var(--eia-accentSoft);color:var(--eia-success);border:1px solid color-mix(in srgb,var(--eia-success) 25%,var(--eia-line))}}
+    .ei-section-head{{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:22px 0 10px}}
+    .ei-section-title{{font-size:12px;font-weight:850;letter-spacing:.08em;text-transform:uppercase;color:var(--eia-text)}}
+    .ei-section-sub{{font-size:11px;color:var(--eia-muted);margin-top:3px}}
+    .ei-kpi-grid{{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:10px 0 18px}}
+    .ei-kpi{{border:1px solid var(--eia-line);background:var(--eia-surface);border-radius:13px;padding:13px;min-height:86px}}
+    .ei-kpi-label{{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--eia-muted);font-weight:750}}
+    .ei-kpi-value{{font-size:23px;font-weight:850;letter-spacing:-.02em;color:var(--eia-text);margin-top:5px}}
+    .ei-kpi-note{{font-size:10px;color:var(--eia-muted);margin-top:4px}}
+    .ei-lifecycle{{display:grid;grid-template-columns:repeat(11,minmax(82px,1fr));gap:5px;margin:8px 0 20px}}
+    .ei-life{{position:relative;text-align:center;padding:9px 5px;border:1px solid var(--eia-line);border-radius:10px;background:var(--eia-surface);font-size:9px;color:var(--eia-muted)}}
+    .ei-life .dot{{display:block;width:8px;height:8px;border-radius:50%;margin:0 auto 5px;background:var(--eia-subtle)}}
+    .ei-life.done{{background:var(--eia-accentSoft);border-color:color-mix(in srgb,var(--eia-success) 35%,var(--eia-line));color:var(--eia-text)}}
+    .ei-life.done .dot{{background:var(--eia-success)}}
+    .ei-life.current{{border-color:var(--eia-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--eia-accent) 10%,transparent);color:var(--eia-text)}}
+    .ei-life.current .dot{{background:var(--eia-accent)}}
+    .ei-command-card{{border:1px solid var(--eia-line);border-radius:17px;padding:18px;background:linear-gradient(135deg,var(--eia-surface),color-mix(in srgb,var(--eia-accent2) 4%,var(--eia-surface)));box-shadow:0 10px 30px var(--eia-shadow)}}
+    .ei-command-label{{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--eia-accent2);font-weight:850}}
+    .ei-command-title{{font-size:21px;font-weight:850;color:var(--eia-text);margin-top:5px}}
+    .ei-command-copy{{font-size:12px;color:var(--eia-muted);line-height:1.5;margin-top:6px}}
+    .ei-nav-note{{font-size:10px;color:var(--eia-sidebarMuted);line-height:1.4;margin:-3px 4px 8px}}
+    @media(max-width:1100px){{.ei-kpi-grid{{grid-template-columns:repeat(3,minmax(0,1fr))}}.ei-lifecycle{{grid-template-columns:repeat(6,minmax(80px,1fr))}}.ei-topbar-brand{{min-width:180px}}}}
+    @media(max-width:700px){{.ei-topbar{{position:relative;top:auto}}.ei-search{{display:none}}.ei-kpi-grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}.ei-lifecycle{{grid-template-columns:repeat(3,minmax(80px,1fr))}}.ei-pill{{display:none}}}}
+
     </style>
     """, unsafe_allow_html=True)

@@ -476,6 +476,18 @@ if not projects:
 project = store.get_project(st.session_state.project_id)
 s = state(project["id"])
 
+# True unified EliteInteliA product shell: the functional Streamlit delivery
+# engine remains underneath, while the consultant-facing chrome matches the
+# product UI language used by the reference design.
+platform_label = s.get("platform_state", {}).get("label", "Platform not selected")
+status_label = "LIVE" if s.get("platform_verified") else ("IN DELIVERY" if s.get("intake") else "READY")
+st.markdown(f"""<div class=\"ei-topbar\">
+  <div class=\"ei-topbar-brand\"><div class=\"ei-mini-mark\">E</div><div><div class=\"ei-product-name\">EliteInteliA <span style=\"color:var(--eia-accent2)\">Intelligence Factory</span></div><div class=\"ei-product-sub\">Enterprise Data &amp; AI Delivery Platform</div></div></div>
+  <div class=\"ei-search\"><span>⌕</span>Search engagement, evidence, requirements…</div>
+  <div class=\"ei-top-actions\"><span class=\"ei-pill live\">● {status_label}</span><span class=\"ei-pill\">{platform_label}</span><span class=\"ei-avatar\">EA</span></div>
+</div>
+<div class=\"ei-context\"><div class=\"ei-breadcrumb\">Engagements / <b>{_safe_html(project["name"])}</b> / Delivery Workspace</div><div class=\"ei-status\">{_safe_html(status_label)}</div></div>""", unsafe_allow_html=True)
+
 st.markdown(
     f'''<div class="hero"><span class="eyebrow">ELITEINTELIA · ENTERPRISE DATA & AI</span><h1>{project["name"]}</h1><p>{project.get("description") or "Turn business intent into a governed, tested, deployable data product."}</p></div>''',
     unsafe_allow_html=True,

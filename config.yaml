@@ -1,6 +1,6 @@
 app:
   name: EliteInteliA
-  version: 0.1.26-eliteintelia-adaptive-ui
+  version: 0.1.29-true-unified-product-ui
   environment: poc
 llm:
   base_url: https://api.generative.engine.capgemini.com/v2/llm/invoke
