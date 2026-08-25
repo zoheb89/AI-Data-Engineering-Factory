@@ -89,17 +89,44 @@ def detect_platform(endpoint, hint=""):
 
 
 def secret_value(name):
-    """Read a deployment secret without ever returning it to the UI."""
+    """Resolve a referenced deployment secret without exposing or persisting its value.
+
+    Supports Streamlit Cloud flat secrets (the normal POC setup) and environment
+    variables. A credential reference is always treated as a *secret name*, never
+    as a token value.
+    """
     if not name:
         return ""
-    value = os.getenv(name, "")
+    key = str(name).strip()
+    if not key:
+        return ""
+
+    # Environment variables are useful for CI/CD and local deployments.
+    value = os.getenv(key, "")
     if value:
-        return value
+        return str(value)
+
     try:
         import streamlit as st
-        return st.secrets.get(name, "")
+        secrets = st.secrets
+        # Standard Streamlit Cloud usage: DATABRICKS_PAT = "..."
+        value = secrets.get(key, "")
+        if value:
+            return str(value)
+        # Also tolerate a nested [credentials] section without changing the
+        # persisted project contract.
+        for section in ("credentials", "secrets", "databricks"):
+            try:
+                block = secrets.get(section)
+                if hasattr(block, "get"):
+                    value = block.get(key, "")
+                    if value:
+                        return str(value)
+            except Exception:
+                continue
     except Exception:
-        return ""
+        pass
+    return ""
 
 def secret_status(config):
     """Resolve only presence of configured secrets, never return secret values."""
@@ -122,6 +149,7 @@ def derive_state(config):
     decision_status = c.get("decision_status") or "not_selected"
     detected = detect_platform(endpoint, platform) if endpoint else ""
     secret = secret_status(c)
+    credential_ref = str(c.get("credential_ref") or "").strip()
     verified = bool(c.get("verified_at"))
     plan_ready = bool(c.get("provisioning_plan"))
 
@@ -136,7 +164,7 @@ def derive_state(config):
     if mode == "existing" and detected and platform != detected and platform != "Other":
         return {"state": "PLATFORM_MISMATCH", "label": "Endpoint does not match selected platform", "next_action": f"Confirm the selected platform ({platform}) or correct the endpoint.", "detected_platform": detected}
     if mode == "existing" and not secret["configured"]:
-        return {"state": "CREDENTIALS_REQUIRED", "label": "Customer credentials are not available", "next_action": "Configure the referenced customer secret in the deployment environment, then verify connectivity.", "detected_platform": detected}
+        return {"state": "CREDENTIALS_REQUIRED", "label": "Referenced customer secret is not available", "next_action": f"Add the secret named {credential_ref or '<SECRET_NAME>'} to the deployment environment, then save and verify connectivity.", "detected_platform": detected}
     if mode == "existing" and verified:
         return {"state": "VERIFIED", "label": "Customer platform verified", "next_action": "Refresh Environment Assessment to persist the verified capability evidence.", "detected_platform": detected}
     if mode == "existing":

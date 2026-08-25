@@ -756,7 +756,16 @@ elif page == "Environment Assessment":
             elif status=="provisioned_verified": st.success(f"Customer environment verified for {target}.")
             else: st.info(f"Environment status: {str(status).replace('_',' ').title()}")
             c1,c2,c3=st.columns(3)
-            c1.metric("Target",target); c2.metric("Status",str(status).replace('_',' ').title()); c3.metric("Provisioning path",str(out.get("provisioning_path") or "Not selected").replace('_',' ').title())
+            # Streamlit st.metric only accepts scalar values. Discovery can
+            # legitimately return a list of target-direction descriptors, so
+            # normalize it for presentation without changing the persisted evidence.
+            if isinstance(target, (list, tuple, set)):
+                target_display = ", ".join(str(x) for x in target if str(x).strip()) or "Unknown / to be confirmed"
+            elif isinstance(target, dict):
+                target_display = str(target.get("name") or target.get("platform") or target)
+            else:
+                target_display = str(target)
+            c1.metric("Target", target_display); c2.metric("Status",str(status).replace('_',' ').title()); c3.metric("Provisioning path",str(out.get("provisioning_path") or "Not selected").replace('_',' ').title())
             st.markdown("#### Environment evidence")
             sections=[("current_environment","Current environment"),("data_sources","Data sources"),("processing","Processing"),("analytics_and_reporting","Analytics & reporting"),("governance","Governance"),("security","Security"),("capabilities","Applicable capabilities"),("gaps","Gaps / unknowns")]
             cols=st.columns(2)
@@ -906,8 +915,8 @@ elif page == "Solution Blueprint":
             rec_platform = selected_platform or (rows[0]["platform"] if rows else "")
             default_index = options.index(rec_platform) if rec_platform in options else 0
             selected = st.selectbox("Final target data platform", options, index=default_index, format_func=lambda x: "Select platform..." if not x else x)
-            cloud_options = ["", "Azure", "AWS", "GCP", "On-premises", "Other"]
-            selected_cloud = st.selectbox("Target cloud / hosting", cloud_options, index=(cloud_options.index(existing_cfg.get("cloud")) if existing_cfg.get("cloud") in cloud_options else 0))
+            cloud_options = ["", "Azure", "AWS", "GCP", "SaaS / Databricks Free", "On-premises", "Other"]
+            selected_cloud = st.selectbox("Target cloud / hosting", cloud_options, index=(cloud_options.index(existing_cfg.get("cloud")) if existing_cfg.get("cloud") in cloud_options else 0), help="For a Databricks Free / workspace-only POC, select SaaS / Databricks Free. Production cloud ownership is captured separately when the customer environment is provisioned.")
             if selected:
                 meta = PLATFORM_CATALOG[selected]
                 st.caption(f'{meta["type"]} · Supported clouds: {", ".join(meta["clouds"])} · Endpoint hint: {meta["endpoint_hint"]}')
@@ -977,8 +986,8 @@ elif page == "Platform Workspace":
         st.caption(f"{PLATFORM_CATALOG[platform]['type']} · Clouds: {', '.join(PLATFORM_CATALOG[platform]['clouds'])}")
     c1, c2 = st.columns(2)
     with c1:
-        cloud_options = ["", "Azure", "AWS", "GCP", "On-premises", "Other"]
-        cloud = st.selectbox("Cloud / hosting", cloud_options, index=(cloud_options.index(cfg.get("cloud")) if cfg.get("cloud") in cloud_options else 0))
+        cloud_options = ["", "Azure", "AWS", "GCP", "SaaS / Databricks Free", "On-premises", "Other"]
+        cloud = st.selectbox("Cloud / hosting", cloud_options, index=(cloud_options.index(cfg.get("cloud")) if cfg.get("cloud") in cloud_options else 0), help="For Databricks Free / workspace-only POC testing, use 'SaaS / Databricks Free'. No Azure subscription is required for this verification path.")
     with c2:
         mode_options = ["", "existing", "provision"]
         mode = st.selectbox("Customer environment path", mode_options, index=(mode_options.index(cfg.get("environment_mode")) if cfg.get("environment_mode") in mode_options else 0), format_func=lambda x: "Select path..." if not x else ("Connect existing customer environment" if x == "existing" else "Provision via approved cloud / IaC plan"))
@@ -1027,6 +1036,10 @@ elif page == "Platform Workspace":
     if cfg.get("platform") and cfg.get("environment_mode") == "existing":
         sec = secret_status(cfg)
         st.write("**Customer credential status:**", "Available" if sec.get("configured") else "Not available")
+        if sec.get("configured"):
+            st.caption(f"Secret reference `{cfg.get('credential_ref')}` resolved in the deployment environment. The secret value is never displayed or persisted.")
+        else:
+            st.caption(f"Expected secret name: `{cfg.get('credential_ref') or 'DATABRICKS_PAT'}`. Add that name to Streamlit Cloud Secrets, then save the configuration again.")
     if cfg.get("platform") and cfg.get("decision_status") == "selected":
         if st.button("Generate Platform Onboarding Plan", type="primary"):
             with st.spinner("Formulating the platform-specific onboarding state and controlled execution plan..."):

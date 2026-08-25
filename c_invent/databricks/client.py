@@ -34,18 +34,42 @@ class DatabricksClient:
             return {"error": f"HTTP {r.status_code}", "details": obj}
         return obj
 
-    def capability_report(self):
+    def verify_customer_environment(self):
+        """Verify the supplied Databricks workspace using only host + customer PAT.
+
+        The workspace-status endpoint is the authoritative connectivity check.
+        Optional capability probes are recorded as evidence but cannot turn a
+        failed authentication into a verified environment.
+        """
         if not self.configured:
-            return {"configured": False, "message": "Set DATABRICKS_HOST and DATABRICKS_TOKEN."}
+            return {"verified": False, "configured": False, "error": "Databricks host and customer token are required."}
+
+        workspace = self._get("/api/2.0/workspace/get-status", {"path": "/"})
+        if workspace.get("error"):
+            return {"verified": False, "configured": True, "workspace": workspace, "error": "Databricks authentication or workspace verification failed."}
+
+        jobs = self._get("/api/2.2/jobs/list", {"limit": 1})
+        pipelines = self._get("/api/2.0/pipelines", {"max_results": 1})
         return {
+            "verified": True,
             "configured": True,
             "host": self.host,
-            "jobs": self._get("/api/2.2/jobs/list", {"limit": 1}),
-            "pipelines": self._get("/api/2.0/pipelines", {"max_results": 1}),
-            "workspace": self._get("/api/2.0/workspace/get-status", {"path": "/"}),
-            "apps_sdk": self._sdk_capability("apps"),
-            "lakebase_sdk": self._sdk_capability("database")
+            "workspace": workspace,
+            "jobs": jobs,
+            "pipelines": pipelines,
+            "verification": "verified_customer_environment",
         }
+
+    def capability_report(self):
+        """Backward-compatible capability report used by existing UI/artifacts."""
+        result = self.verify_customer_environment()
+        if not result.get("verified"):
+            return {"configured": bool(self.configured), **result}
+        result.update({
+            "apps_sdk": self._sdk_capability("apps"),
+            "lakebase_sdk": self._sdk_capability("database"),
+        })
+        return result
 
     def _sdk_capability(self, attr):
         try:
