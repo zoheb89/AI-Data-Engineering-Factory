@@ -725,13 +725,13 @@ Use the following structured evidence only:
     def run_bi(self,pid): return self._run(pid,"bi",prompts.BI,evidence_limit=5000,use_documents=False,max_tokens=1200)
     def run_full_qa(self,pid): return self._run(pid,"full_qa",prompts.FULL_QA,evidence_limit=6000,use_documents=False,max_tokens=1200)
 
-    def run_engineering(self,pid):
-        """Generate a compact metadata-driven engineering plan.
+    def run_engineering(self, pid):
+        """Generate production-safe Medallion engineering in resumable chunks.
 
-        Engineering is deliberately a dedicated, bounded LLM call. The generic
-        _run() path can include documents/project context and is too expensive
-        for the Capgemini gateway once Discovery + Blueprint exist. Engineering
-        should consume the approved structured artifacts only.
+        The Capgemini gateway is synchronous and has a server-side completion
+        window. A single large engineering prompt is therefore intentionally
+        avoided. Each component is small, persisted independently, and can be
+        resumed after a timeout without regenerating successful components.
         """
         blueprint = self.store.latest_run(pid, "blueprint")
         metadata = self.store.latest_run(pid, "metadata")
@@ -743,6 +743,21 @@ Use the following structured evidence only:
         if not metadata or not self._fresh_after(metadata, blueprint):
             return {"error": "Engineering requires Metadata generated after the approved Blueprint."}
 
+        # The platform/environment gate is deliberately checked here too. This
+        # protects direct URL navigation from bypassing the Control Plane.
+        project = self.store.get_project(pid)
+        pcfg = project.get("platform_config") or {}
+        platform_state = derive_state(pcfg)
+        if platform_state.get("state") != "VERIFIED":
+            return {"error": "Engineering requires a verified customer target platform. Complete Platform Workspace verification first."}
+        verified_at = str(pcfg.get("verified_at") or "")
+        env_run = self.store.latest_run(pid, "environment_assessment")
+        assessment = self.store.latest_run(pid, "assessment")
+        if not env_run or (verified_at and env_run.get("created_at", "") < verified_at):
+            return {"error": "Engineering requires Environment Assessment to be refreshed after customer platform verification."}
+        if not assessment or assessment.get("created_at", "") < env_run.get("created_at", ""):
+            return {"error": "Engineering requires Current-State Assessment to be refreshed from the latest Environment Assessment."}
+
         def output(run):
             return run.get("output") if isinstance(run, dict) else None
 
@@ -751,77 +766,165 @@ Use the following structured evidence only:
         d = output(discovery) or {}
         evidence = {
             "blueprint": {k: b.get(k) for k in (
-                "summary", "target_architecture", "data_flow",
-                "security_governance", "environments", "delivery_phases",
-                "decisions", "open_questions"
+                "summary", "target_architecture", "data_flow", "security_governance",
+                "environments", "delivery_phases", "decisions", "open_questions"
             ) if k in b},
             "metadata": {k: m.get(k) for k in (
-                "summary", "sources", "entities", "tables", "columns",
-                "relationships", "transformations", "data_quality", "lineage"
+                "summary", "sources", "entities", "tables", "columns", "relationships",
+                "transformations", "data_quality", "lineage"
             ) if k in m},
             "discovery": {k: d.get(k) for k in (
                 "domain", "objectives", "systems", "sources", "requirements"
             ) if k in d},
+            "customer_platform": {
+                "platform": pcfg.get("platform"),
+                "cloud": pcfg.get("cloud"),
+                "environment_mode": pcfg.get("environment_mode"),
+                "verified_at": pcfg.get("verified_at"),
+                "verification": (pcfg.get("verification_snapshot") or {}).get("verification"),
+            },
         }
-        prior = json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))[:5200]
 
-        system = """You are the C INVENT Lead Data Engineer.
-Turn the approved Blueprint and available Metadata into a concise, domain-neutral
-engineering plan. Do not invent source tables or columns. Mark missing metadata
-as assumptions/open questions. Prefer reusable metadata-driven Bronze/Silver/Gold
-patterns, idempotent ingestion, data-quality gates, audit columns, error handling,
-incremental/CDC strategy, Lakeflow orchestration and testable artifacts.
-Return valid JSON only. Keep arrays short (maximum 4 items each).
-Required keys: summary, ingestion, bronze, silver, gold, data_quality, orchestration,
-parameters, testing, code_artifacts, assumptions, open_questions."""
-        user = "Create the engineering plan from these approved structured artifacts only:\n\n" + prior
-
-        try:
-            out = self.llm.invoke_json(
-                user, system,
-                extra_params={
-                    "maxTokens": 500, "temperature": 0.0,
-                    "streaming": False, "topP": 0.9,
-                },
-            )
-            if isinstance(out, dict) and out.get("error") and len(out) == 1:
-                raise RuntimeError(out["error"])
-            self.store.save_run(pid, "engineering", "success", system, out)
-            self.store.add_audit(pid, "llm:engineering", "success", json.dumps(out)[:4000])
-            if isinstance(out,dict):
-                for item in out.get("code_artifacts",[]) if isinstance(out.get("code_artifacts",[]),list) else []:
-                    if isinstance(item,dict) and item.get("content"):
-                        self.store.save_artifact(pid,item.get("layer","engineering"),
-                            item.get("name","generated.py"),item.get("language","python"),item["content"])
-            return out
-        except Exception as e:
-            # One deliberately smaller retry. Never resend customer documents.
+        state_artifact = self.store.latest_artifact(pid, "engineering_generation")
+        generation = {}
+        if state_artifact:
             try:
-                compact = json.dumps({
-                    "summary": b.get("summary"),
-                    "target_architecture": b.get("target_architecture"),
-                    "data_flow": b.get("data_flow"),
-                    "requirements": d.get("requirements", [])[:3],
-                    "metadata": {k:m.get(k) for k in ("sources","entities","tables","data_quality") if k in m},
-                }, ensure_ascii=False, separators=(",", ":"))[:2400]
+                generation = json.loads(state_artifact.get("content") or "{}")
+            except Exception:
+                generation = {}
+        if generation.get("metadata_created_at") != metadata.get("created_at"):
+            generation = {
+                "generation_id": __import__("uuid").uuid4().hex,
+                "status": "RUNNING",
+                "metadata_created_at": metadata.get("created_at"),
+                "blueprint_created_at": blueprint.get("created_at"),
+                "started_at": self.store.now(),
+                "completed_components": {},
+                "attempts": {},
+            }
+        generation["status"] = "RUNNING"
+        generation["updated_at"] = self.store.now()
+        self.store.save_artifact(
+            pid, "engineering_generation", "engineering_generation.json", "json",
+            json.dumps(generation, indent=2, ensure_ascii=False),
+        )
+
+        component_specs = [
+            ("bronze", "Design the Bronze/raw layer: ingestion pattern, raw/audit columns, idempotency and replay. Keep it implementation-ready but concise."),
+            ("silver", "Design the Silver/conformed layer: cleansing, standardization, keys, validation and entity conformance."),
+            ("gold", "Design the Gold/business layer: business-ready subject areas, metrics, semantic serving and downstream consumption."),
+            ("data_quality", "Define practical data-quality rules, expectations, quarantine/error handling and observability."),
+            ("orchestration", "Define orchestration using metadata-driven Lakeflow/Jobs patterns, dependencies, retries, parameters and scheduling."),
+            ("testing", "Define engineering tests: schema, data-quality, transformation, reconciliation, lineage and deployment checks."),
+            ("code_artifacts", "List the minimum reusable implementation artifacts to generate from metadata. Do not fabricate source columns."),
+        ]
+
+        system = (
+            "You are the C INVENT Lead Data Engineer. Work only from the supplied approved "
+            "structured evidence. Do not invent source tables, columns, business facts or "
+            "customer capabilities. Return valid compact JSON only. Maximum 4 items per array. "
+            "Design reusable metadata-driven Bronze/Silver/Gold engineering, idempotent ingestion, "
+            "quality gates, auditability, lineage and testability."
+        )
+        results = generation.get("completed_components") or {}
+        attempts = generation.get("attempts") or {}
+
+        for name, task in component_specs:
+            if isinstance(results.get(name), dict) and results[name]:
+                continue
+            compact_evidence = json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))
+            prior = json.dumps({k: results[k] for k in results if k in {"bronze", "silver", "gold", "data_quality", "orchestration", "testing"}}, ensure_ascii=False, separators=(",", ":"))[:2200]
+            user = (
+                f"COMPONENT: {name}\nTASK: {task}\n\nAPPROVED EVIDENCE:\n"
+                + compact_evidence[:4200]
+                + ("\n\nALREADY GENERATED COMPONENTS:\n" + prior if prior else "")
+            )
+            attempts[name] = int(attempts.get(name, 0)) + 1
+            generation["attempts"] = attempts
+            self.store.save_artifact(
+                pid, "engineering_generation", "engineering_generation.json", "json",
+                json.dumps(generation, indent=2, ensure_ascii=False),
+            )
+            try:
                 out = self.llm.invoke_json(
-                    "Return a minimal engineering plan JSON for this evidence:\n" + compact,
+                    user,
                     system,
                     extra_params={
-                        "maxTokens": 300, "temperature": 0.0,
-                        "streaming": False, "topP": 0.9,
+                        "maxTokens": 240 if name != "code_artifacts" else 220,
+                        "temperature": 0.0,
+                        "streaming": False,
+                        "topP": 0.9,
                     },
                 )
-                if isinstance(out,dict) and not (out.get("error") and len(out)==1):
-                    self.store.save_run(pid, "engineering", "success", system, out)
-                    self.store.add_audit(pid, "llm:engineering", "success", json.dumps(out)[:4000])
-                    return out
-            except Exception as retry_error:
-                e = retry_error
-            out={"error":str(e)}
-            self.store.save_run(pid,"engineering","failed",system,out)
-            self.store.add_audit(pid,"llm:engineering","failed",str(e))
-            return out
+                if not isinstance(out, dict) or (out.get("error") and len(out) == 1):
+                    raise RuntimeError(out.get("error", "Model returned an invalid engineering component."))
+                results[name] = out
+                generation["completed_components"] = results
+                generation["updated_at"] = self.store.now()
+                self.store.save_artifact(
+                    pid, "engineering_generation", "engineering_generation.json", "json",
+                    json.dumps(generation, indent=2, ensure_ascii=False),
+                )
+                self.store.save_artifact(
+                    pid, f"engineering_{name}", f"{name}.json", "json",
+                    json.dumps(out, indent=2, ensure_ascii=False),
+                )
+                self.store.add_audit(pid, f"engineering:{name}", "success", json.dumps(out)[:3000])
+            except Exception as exc:
+                msg = str(exc)
+                generation["status"] = "TIMEOUT" if any(x in msg.lower() for x in ("timeout", "timed out", "gateway")) else "FAILED"
+                generation["error"] = msg
+                generation["failed_component"] = name
+                generation["updated_at"] = self.store.now()
+                self.store.save_artifact(
+                    pid, "engineering_generation", "engineering_generation.json", "json",
+                    json.dumps(generation, indent=2, ensure_ascii=False),
+                )
+                self.store.add_audit(pid, f"engineering:{name}", generation["status"].lower(), msg[:4000])
+                return {
+                    "status": generation["status"],
+                    "generation_id": generation["generation_id"],
+                    "failed_component": name,
+                    "completed_components": list(results.keys()),
+                    "error": msg,
+                    "retryable": True,
+                    "message": "Generation is resumable. Retry will continue from the failed component; completed components are preserved.",
+                }
+
+        final = {
+            "summary": "Production-safe metadata-driven Medallion engineering package generated from approved evidence.",
+            "status": "SUCCEEDED",
+            "generation_id": generation["generation_id"],
+            "platform": pcfg.get("platform"),
+            "cloud": pcfg.get("cloud"),
+            "bronze": results.get("bronze", {}),
+            "silver": results.get("silver", {}),
+            "gold": results.get("gold", {}),
+            "data_quality": results.get("data_quality", {}),
+            "orchestration": results.get("orchestration", {}),
+            "testing": results.get("testing", {}),
+            "code_artifacts": results.get("code_artifacts", {}),
+            "traceability": {
+                "blueprint_run": blueprint.get("id"),
+                "metadata_run": metadata.get("id"),
+                "environment_run": env_run.get("id"),
+                "assessment_run": assessment.get("id"),
+                "customer_environment_verified": True,
+            },
+        }
+        self.store.save_run(pid, "engineering", "success", system, final)
+        generation["status"] = "SUCCEEDED"
+        generation["completed_at"] = self.store.now()
+        generation["updated_at"] = generation["completed_at"]
+        generation["completed_components"] = results
+        generation.pop("error", None)
+        generation.pop("failed_component", None)
+        self.store.save_artifact(
+            pid, "engineering_generation", "engineering_generation.json", "json",
+            json.dumps(generation, indent=2, ensure_ascii=False),
+        )
+        self.store.add_audit(pid, "llm:engineering", "success", json.dumps(final)[:5000])
+        return final
 
     def run_lakeflow(self,pid):
         instructions=prompts.ENGINEERING+"""

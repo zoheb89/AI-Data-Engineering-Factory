@@ -87,6 +87,8 @@ STAGE_PAGES = {
 
 
 def stage_gate_state(s):
+    # Navigation is intentionally more permissive than execution, but every
+    # downstream stage still requires the persisted Control Plane prerequisites.
     return {
         "intake": True,
         "discovery": bool(s.get("intake")),
@@ -94,8 +96,8 @@ def stage_gate_state(s):
         "assessment": bool(s.get("environment")),
         "architecture": bool(s.get("assessment")),
         "platform": bool(s.get("architecture_approved")),
-        "metadata": bool(s.get("architecture_approved") and s.get("platform")),
-        "engineering": bool(s.get("metadata")),
+        "metadata": bool(s.get("architecture_approved") and s.get("platform_verified") and s.get("assessment_after_platform")),
+        "engineering": bool(s.get("metadata") and s.get("platform_verified") and s.get("assessment_after_platform")),
         "validate": bool(s.get("engineering")),
         "deploy": bool(s.get("validate")),
         "operate": bool(s.get("deploy")),
@@ -152,7 +154,15 @@ def state(pid):
     architecture_approved = current_approval(pid, "blueprint", architecture)
     platform_config = get_platform_config_safe(pid)
     platform_state = derive_state(platform_config)
-    platform_ready = bool(architecture_approved and platform_state.get("state") in {"VERIFIED", "PLAN_READY"})
+    platform_verified = bool(architecture_approved and platform_state.get("state") == "VERIFIED")
+    verified_at = str(platform_config.get("verified_at") or "")
+    environment_after_platform = bool(
+        environment and platform_verified and (not verified_at or environment.get("created_at", "") >= verified_at)
+    )
+    assessment_after_platform = bool(
+        assessment and environment_after_platform and assessment.get("created_at", "") >= environment.get("created_at", "")
+    )
+    platform_ready = platform_verified
     metadata = latest(pid, "metadata")
     engineering = latest(pid, "engineering")
     validate = latest(pid, "qa")
@@ -166,8 +176,11 @@ def state(pid):
         "platform_config": platform_config,
         "platform_state": platform_state,
         "platform": platform_ready,
-        "metadata": bool(metadata and architecture and fresh(metadata, architecture) and architecture_approved),
-        "engineering": bool(engineering and metadata and fresh(engineering, metadata) and architecture_approved),
+        "platform_verified": platform_verified,
+        "environment_after_platform": environment_after_platform,
+        "assessment_after_platform": assessment_after_platform,
+        "metadata": bool(metadata and architecture and fresh(metadata, architecture) and architecture_approved and platform_verified and assessment_after_platform),
+        "engineering": bool(engineering and metadata and fresh(engineering, metadata) and architecture_approved and platform_verified and assessment_after_platform),
         "validate": bool(validate and engineering and fresh(validate, engineering)),
         "deploy": bool(validate and engineering and fresh(validate, engineering) and current_approval(pid, "deployment", validate)),
         "operate": bool(validate and current_approval(pid, "deployment", validate)),
@@ -740,7 +753,9 @@ elif page == "Environment Assessment":
             dout=d.get("output") or {}
             st.markdown("#### Discovery target direction")
             st.info(f"{dout.get('target_platform_direction') or 'Not specified'} · {str(dout.get('target_platform_status') or 'customer_stated_direction').replace('_',' ').title()}")
-        if st.button("Run Environment Assessment",type="primary"):
+        env_state = derive_state(get_platform_config_safe(project["id"]))
+        env_button_label = "Refresh Environment Assessment" if env_state.get("state") == "VERIFIED" else "Run Environment Assessment"
+        if st.button(env_button_label,type="primary"):
             with st.spinner("Evaluating environment and applicable capabilities..."):
                 result=orch.run_environment_assessment(project["id"])
             if isinstance(result,dict) and result.get("error"): st.error(result["error"])
@@ -1064,8 +1079,8 @@ elif page == "Platform Workspace":
                 st.success("Customer environment verification completed. Refresh Environment Assessment to consume the evidence snapshot.")
                 st.json(result.get("platform_capability_evidence", {}))
     if current["state"] == "VERIFIED":
-        st.success("Customer platform is verified. This is the only state that can be used as verified customer-environment evidence.")
-        next_workspace_button("Metadata", "Metadata", "continue_after_platform")
+        st.success("Customer platform is verified. Refresh Environment Assessment so the Control Plane consumes the customer-environment evidence snapshot.")
+        next_workspace_button("Refresh Environment Assessment", "Environment Assessment", "refresh_environment_after_platform")
     elif current["state"] == "PLAN_READY":
         st.warning("Provisioning plan is ready. Human approval and authorized execution are still required before the environment can be called verified.")
         next_workspace_button("Metadata", "Metadata", "continue_after_platform_plan")
@@ -1074,8 +1089,10 @@ elif page == "Metadata":
     st.subheader("Metadata & Canonical Data Model")
     if not s["architecture_approved"]:
         gate_message("Metadata is locked until the current Architecture is approved.")
-    elif not s["platform"]:
-        gate_message("Complete Platform Workspace: confirm the target and reach VERIFIED or PLAN_READY before Metadata.")
+    elif not s.get("platform_verified"):
+        gate_message("Metadata is locked until the selected customer platform is VERIFIED in Platform Workspace.")
+    elif not s.get("assessment_after_platform"):
+        gate_message("Metadata is locked until Environment Assessment and Current-State Assessment are refreshed after platform verification.")
     elif not s["architecture"]:
         gate_message("Generate Architecture first.")
     else:
@@ -1103,21 +1120,43 @@ elif page == "Metadata":
 elif page == "Engineering Factory":
     st.subheader("AI Engineering Factory")
     if not s["metadata"]:
-        gate_message("Engineering is locked until current Metadata exists after the approved Architecture.")
+        if not s.get("platform_verified"):
+            gate_message("Engineering is locked until the customer platform is VERIFIED.")
+        elif not s.get("assessment_after_platform"):
+            gate_message("Engineering is locked until Environment Assessment and Current-State Assessment are refreshed after platform verification.")
+        else:
+            gate_message("Engineering is locked until current Metadata exists after the approved Architecture.")
     else:
-        if st.button("Execute engineering.generate", type="primary"): 
-            with st.spinner("Generating medallion engineering..."):
+        gen_art = store.latest_artifact(project["id"], "engineering_generation")
+        if gen_art:
+            try:
+                gen_state = json.loads(gen_art.get("content") or "{}")
+            except Exception:
+                gen_state = {}
+            status = gen_state.get("status")
+            completed = list((gen_state.get("completed_components") or {}).keys())
+            if status in {"RUNNING", "TIMEOUT", "FAILED"} and completed:
+                st.info(f"Generation state: **{status}** · Completed: {', '.join(completed)}")
+            if status == "TIMEOUT":
+                st.warning("The model gateway timed out. Retry is resumable and will continue from the failed component; completed components are preserved.")
+        if st.button("Retry / Execute Engineering Generation", type="primary", use_container_width=True):
+            with st.spinner("Generating resumable Medallion engineering components..."):
                 result = orch.run_engineering(project["id"])
-            if isinstance(result, dict) and result.get("error"):
+            if isinstance(result, dict) and result.get("status") in {"TIMEOUT", "FAILED"}:
+                st.warning(result.get("message") or "Engineering generation did not complete.")
+                st.json(result)
+            elif isinstance(result, dict) and result.get("error"):
                 st.error(result["error"])
             else:
+                st.success("Engineering Pack generated and persisted.")
                 st.json(result)
-                st.success("Engineering generated.")
+            st.rerun()
         if s["engineering"]:
-            st.success("Engineering Pack exists.")
+            st.success("Engineering Pack exists and passed the generation gate.")
             for a in store.artifacts(project["id"]):
-                with st.expander(f"{a['kind']} · {a['name']}"):
-                    st.code(a["content"], language=a["language"] or "text")
+                if a["kind"].startswith("engineering_") and a["kind"] != "engineering_generation":
+                    with st.expander(f"{a['kind']} · {a['name']}"):
+                        st.code(a["content"], language=a["language"] or "text")
             next_workspace_button("Validation / QA", "QA & Traceability", "continue_after_engineering")
 
 elif page == "Platform Factory":
