@@ -26,35 +26,9 @@ from c_invent.services.synthetic_lab import generate_sources, run_local_pipeline
 from c_invent.services.universal_intake import analyze_intake, build_intake_bundle
 
 st.set_page_config(page_title="EliteInteliA Intelligence Factory", page_icon="✦", layout="wide")
-inject_css()
+st.session_state.setdefault("ui_theme", "System")
+inject_css(st.session_state.get("ui_theme", "System"))
 
-st.markdown("""
-<style>
-.arch-shell{border:1px solid #e5e7eb;border-radius:18px;background:#fbfcfe;padding:18px;margin:8px 0 18px;overflow-x:auto}
-.arch-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}
-.arch-eyebrow{font-size:11px;letter-spacing:.12em;font-weight:800;color:#ff3621}
-.arch-main{font-size:20px;font-weight:800;margin-top:4px}
-.arch-target{min-width:250px;padding:12px 14px;border:1px solid #dbe2ea;border-radius:12px;background:#fff;font-size:14px}
-.arch-target span{color:#667085;font-size:12px}
-.arch-flow{display:flex;align-items:stretch;gap:0;min-width:1120px}
-.arch-node-wrap{display:flex;align-items:stretch;flex:1}
-.arch-card{min-width:132px;flex:1;border:1px solid #dbe2ea;background:#fff;border-radius:13px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
-.arch-key{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#7b8491;font-weight:800}
-.arch-title{font-size:14px;font-weight:800;margin-top:6px;line-height:1.25}
-.arch-detail{font-size:11px;color:#667085;margin-top:7px;line-height:1.4}
-.arch-arrow{font-size:22px;font-weight:800;color:#98a2b3;padding:38px 8px 0}
-.arch-cross{margin-top:18px;padding-top:14px;border-top:1px dashed #cfd6df;font-size:12px;color:#667085}
-.arch-chip{display:inline-block;padding:5px 9px;border-radius:999px;background:#eef2f6;margin:7px 5px 0 0;font-size:11px;color:#475467}
-html,body,[class*='st-'],.stApp{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif!important}
-.stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp h5,.stApp h6,.stMarkdown,.stText,.stCaption,.stButton button,.stSelectbox,.stTextInput,.stTextArea,.stMetric,.stAlert{font-family:inherit!important}
-.stApp h1{font-size:2rem!important;line-height:1.15!important;font-weight:800!important}.stApp h2{font-size:1.45rem!important;line-height:1.2!important;font-weight:800!important}.stApp h3{font-size:1.12rem!important;line-height:1.25!important;font-weight:800!important}.stApp p,.stApp li,.stApp label{font-size:.9rem;line-height:1.45}
-code,pre,[data-testid='stCode'],[data-testid='stJson']{font-family:'SFMono-Regular',Consolas,'Liberation Mono',monospace!important}
-.ui-card{border:1px solid #e5e7eb;border-radius:14px;background:#fff;padding:15px 16px;margin:6px 0 10px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
-.ui-card-title{font-weight:800;font-size:15px;color:#111827;margin-bottom:6px}.ui-card-sub{font-size:12px;color:#667085;line-height:1.45}
-.fit-row{display:grid;grid-template-columns:170px 1fr 72px;gap:12px;align-items:center;margin:9px 0}.fit-name{font-weight:750;font-size:13px}.fit-track{height:9px;background:#edf0f3;border-radius:99px;overflow:hidden}.fit-fill{height:100%;background:#ff3621;border-radius:99px}.fit-pct{text-align:right;font-weight:800;font-size:13px}
-@media(max-width:900px){.arch-head{display:block}.arch-target{margin-top:12px}.arch-flow{min-width:1000px}}
-</style>
-""", unsafe_allow_html=True)
 settings = load_settings()
 store = ProjectStore()
 orch = Orchestrator(settings, store)
@@ -270,7 +244,7 @@ def render_platform_evaluation(rows, selected=""):
             badge="★ Recommended" if idx==0 else "Alternative"
             selected_badge=" · Selected" if row.get("platform")==selected else ""
             html=(f'<div class="ui-card"><div class="ui-card-title">{_safe_html(row["platform"])} '
-                  f'<span style="color:#667085;font-size:11px">{badge}{selected_badge}</span></div>'
+                  f'<span class="fit-badge">{badge}{selected_badge}</span></div>'
                   f'<div class="ui-card-sub">Architecture fit</div>'
                   f'<div class="fit-row"><div class="fit-name">Fit</div><div class="fit-track"><div class="fit-fill" style="width:{row["fit_score"]}%"></div></div><div class="fit-pct">{row["fit_score"]:.1f}%</div></div>'
                   f'<div class="ui-card-sub">Evidence-weighted selection likelihood</div>'
@@ -393,6 +367,16 @@ if "project_id" not in st.session_state or not any(p["id"] == st.session_state.p
 with st.sidebar:
     st.markdown("""<div class="brand-lockup"><div class="brand-mark">E</div><div><div class="brand-name">EliteInteliA</div><div class="brand-sub">INTELLIGENCE FACTORY</div></div></div>""", unsafe_allow_html=True)
     st.caption(f"Enterprise Data & AI Intelligence Factory · {settings.app_version}")
+
+    theme_choice = st.selectbox(
+        "Appearance",
+        ["System", "Light", "Dark"],
+        index=["System", "Light", "Dark"].index(st.session_state.get("ui_theme", "System")),
+        help="System follows your browser/OS preference. Light and Dark are explicit overrides.",
+    )
+    if theme_choice != st.session_state.get("ui_theme"):
+        st.session_state.ui_theme = theme_choice
+        st.rerun()
 
     if st.button("＋ New Engagement", use_container_width=True):
         st.session_state.show_new_project = True
