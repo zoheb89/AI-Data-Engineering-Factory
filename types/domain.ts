@@ -1,0 +1,1 @@
+export type Engagement={id:string;title:string;customer:string;source:string;domain:string;stage:string;progress:number;description:string;status:'Active'|'Assessment'|'Intake'|'Completed';date:string};
