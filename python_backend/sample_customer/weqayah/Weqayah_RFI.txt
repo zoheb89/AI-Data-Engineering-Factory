@@ -1,9 +1,0 @@
-Customer: Weqayah Medical Centre
-Domain: Healthcare
-Current platform: DataOcean HMS
-Current database: SQL Server
-Objective: Modernize the hospital data and analytics platform and reduce manual data engineering.
-
-Processes: Patient Registration, Appointments, Encounters, Billing, Pharmacy, Laboratory, Radiology, Operational Reporting.
-Desired: Cloud modernization, Azure/Databricks target, automated ingestion, metadata-driven ETL, Bronze/Silver/Gold, DQ, business analytics, potential operational application.
-Open questions: SQL Server version, data volume/growth, CDC method, network/connectivity, full table inventory, retention, regulatory controls, application requirements, SLAs and recovery objectives.

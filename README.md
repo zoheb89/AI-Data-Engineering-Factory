@@ -1,66 +1,66 @@
-# EliteInteliA Intelligence Factory 0.2.1 — Next.js + Python
+# EliteInteliA Intelligence Factory — GitHub Ready
 
-This build separates the enterprise product UI from the existing Python AI/data-engineering engine.
+This repository contains the cloud-first product:
 
-## Architecture
+- `frontend/` — Next.js / React EliteInteliA UI
+- `backend/` — FastAPI + the existing C INVENT Python engine
+- `render.yaml` — Render backend deployment
+- `backend/Dockerfile` — container deployment
+- `backend/config.yaml` — non-secret product configuration
 
-Next.js / React UI -> HTTP API adapter -> existing `c_invent` Python services -> ProjectStore/SQLite -> Databricks/LLM adapters.
+## Cloud architecture
 
-The Python business logic was copied from the supplied 0.1.29 source package. It is not replaced by a new backend.
+Browser → Vercel/Next.js → FastAPI/Render → C INVENT engine → Databricks/customer platforms
 
-## Run
+## Deploy backend
 
-### Python backend
+1. Push this repository to GitHub.
+2. Create a Render Web Service from the repository.
+3. Set Root Directory to `backend`.
+4. Build Command: `pip install -r requirements.txt`
+5. Start Command: `uvicorn api_server:app --host 0.0.0.0 --port $PORT`
+6. Add environment variables/secrets:
+   - `CORS_ORIGINS`
+   - `DATABRICKS_HOST`
+   - `DATABRICKS_TOKEN`
+   - `DATABRICKS_WAREHOUSE_ID`
+   - `provider-neutral_LLM_BASE_URL`
+   - `provider-neutral_LLM_MODEL`
+   - `provider-neutral_LLM_API_KEY`
+   - optional provider-neutral workspace settings
+   - `CINVENT_ALLOW_MUTATIONS=false` initially
+7. Verify `https://<render-host>/health` and `/docs`.
 
-```bash
-cd python_backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn api_server:app --host 0.0.0.0 --port 8000
-```
+## Deploy frontend
 
-Windows:
-```powershell
-cd python_backend
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn api_server:app --host 0.0.0.0 --port 8000
-```
+1. Import the same GitHub repository into Vercel.
+2. Set Root Directory to `frontend`.
+3. Framework: Next.js.
+4. Add:
+   `NEXT_PUBLIC_API_BASE_URL=https://<your-render-host>`
+5. Deploy.
 
-### Next.js frontend
+## First test
 
-```bash
-npm install
-cp .env.example .env.local
-npm run dev
-```
-
-Open http://localhost:3000.
-
-## Real lifecycle
-
-1. Intake Center uploads an RFI/RFP/notes file or pasted content.
-2. `/api/intake` creates/reuses an engagement and stores extracted evidence.
-3. The returned engagement ID is saved in browser local storage.
-4. Workspace pages call the existing Python `Orchestrator`.
-5. Outputs/runs/artifacts remain in the existing ProjectStore.
-6. Configure Databricks/LLM environment variables only when those capabilities are needed.
-
-## API endpoints
-
-- `GET /api/health`
-- `GET /api/projects`
-- `POST /api/projects`
-- `GET /api/projects/{id}`
-- `POST /api/intake`
-- `POST /api/projects/{id}/stage/{stage}`
-- `POST /api/projects/{id}/platform`
-- `GET /api/projects/{id}/runs/{agent}`
+1. Open the Vercel URL.
+2. Create an engagement.
+3. Submit business intent or upload an RFI/RFP/PDF/DOCX/XLSX.
+4. Confirm intake is created.
+5. Run Discovery.
+6. Run Environment Assessment.
+7. Run Current-State Assessment.
+8. Generate Architecture.
+9. Approve Architecture.
+10. Configure/verify the target platform if required.
+11. Generate Metadata.
+12. Generate Engineering.
+13. Run Validation.
+14. Generate/download the PDF and intake evidence pack.
 
 ## Important
 
-The UI does not fabricate customer evidence. Intake analysis labels domain, source, use-case and platform detections as signals. Discovery and downstream gates remain responsible for validation.
+Do not commit customer credentials, API keys, `.env` files, tokens or secrets.
 
-This build is an integration foundation, not a production security boundary. Before enterprise deployment add authentication/SSO, authorization, secret management, audit hardening, file malware scanning, rate limits and customer-isolated storage.
+The MVP keeps SQLite persistence inside the backend container. For enterprise production, move persistence to managed PostgreSQL and evidence/artifacts to object storage before using real customer data at scale.
+
+The backend is intentionally evidence-driven: it must not claim customer source connectivity or platform provisioning without actual verification evidence.

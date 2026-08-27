@@ -1,7 +1,0 @@
-patient_id is the Patient business identifier.
-appointment_id is unique.
-encounter_id is unique.
-invoice_id is unique.
-Curated entities require audit timestamps.
-Silver removes duplicate business keys and normalizes types.
-Gold exposes business-friendly metrics and subject areas.
