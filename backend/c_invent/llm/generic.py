@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-import json, time, uuid
+import json, time, uuid, re
 from typing import Any
 import requests
 
@@ -98,26 +98,43 @@ class GenericLLM:
         return json.dumps(obj,ensure_ascii=False)
 
     def invoke(self,text,system_prompt="",files=None,session_id=None,extra_params=None):
-        if not self.settings.llm_base_url: raise LLMError("LLM endpoint is not configured.")
+        if not self.settings.llm_base_url:
+            raise LLMError("LLM endpoint is not configured.")
         protocol=self._protocol()
         headers=self._headers()
         if protocol=="anthropic":
             headers["anthropic-version"]="2023-06-01"
         if protocol=="google":
-            # Google commonly uses x-goog-api-key rather than Authorization.
             headers.pop(self.settings.llm_auth_header, None)
             headers["x-goog-api-key"]=(self.settings.llm_api_key or "").strip()
         payload=self._payload(text,system_prompt,extra_params,session_id)
         timeout=int(self.settings.llm_timeout_seconds or 90)
+
+        response=None
+        last_error=None
+        for attempt in range(2):
+            try:
+                response=requests.post(self._url(),headers=headers,json=payload,timeout=timeout)
+            except requests.RequestException as e:
+                last_error=e
+                if attempt==0:
+                    time.sleep(1.0)
+                    continue
+                raise LLMError(f"LLM connection failed: {e}") from e
+            if response.status_code in (408,429,500,502,503,504) and attempt==0:
+                time.sleep(1.5)
+                continue
+            break
+
+        if response is None:
+            raise LLMError(f"LLM connection failed: {last_error}")
+        if response.status_code>=400:
+            detail=response.text[:3000]
+            raise LLMError(f"LLM HTTP {response.status_code}: {detail}")
         try:
-            r=requests.post(self._url(),headers=headers,json=payload,timeout=timeout)
-        except requests.RequestException as e:
-            raise LLMError(f"LLM connection failed: {e}") from e
-        if r.status_code>=400:
-            detail=r.text[:3000]
-            raise LLMError(f"LLM HTTP {r.status_code}: {detail}")
-        try: obj=r.json()
-        except Exception as e: raise LLMError(f"LLM returned non-JSON: {r.text[:2000]}") from e
+            obj=response.json()
+        except Exception as e:
+            raise LLMError(f"LLM returned non-JSON: {response.text[:2000]}") from e
         return {"content":self._content(obj),"raw":obj}
 
     def invoke_json(self,text,system_prompt="",**kwargs):

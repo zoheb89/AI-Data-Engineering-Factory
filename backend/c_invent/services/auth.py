@@ -1,200 +1,128 @@
-"""Authentication and role-based access control.
 
-Design goals
-------------
-* No plaintext passwords: PBKDF2-HMAC-SHA256 with a per-user salt.
-* Stateless sessions: signed, expiring tokens (HMAC-SHA256), so the API can
-  scale horizontally without shared session storage.
-* Fail closed in production: if ``AUTH_SECRET`` is unset the service refuses to
-  issue tokens rather than signing with a guessable default.
-* Opt-in rollout: ``AUTH_REQUIRED=false`` keeps existing deployments working
-  while auth is being introduced.
-
-Roles map to the personas the product already models. ``admin`` may manage
-users; ``editor`` may execute stages and approve; ``viewer`` is read-only.
-"""
 from __future__ import annotations
-
-import base64
-import hashlib
-import hmac
-import json
-import os
-import secrets
-import sqlite3
-import time
+import os, sqlite3, uuid, json, time, hashlib, hmac, base64, secrets
 from pathlib import Path
-from typing import Any, Dict, Optional
 
-DB_PATH = Path(os.getenv("CINVENT_DB_PATH", "data/cinvent.db"))
-TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL", "43200"))  # 12 hours
-PBKDF2_ROUNDS = 240_000
+ROLES={"viewer":10,"analyst":20,"architect":30,"editor":40,"admin":50}
+TOKEN_TTL_SECONDS=3600
 
-ROLES = ("admin", "editor", "viewer")
-# Actions each role may perform. Checked by require_role().
-ROLE_RANK = {"viewer": 0, "editor": 1, "admin": 2}
+class AuthError(RuntimeError): pass
 
+def auth_required():
+    v=os.getenv("AUTH_REQUIRED",os.getenv("AUTH_ENABLED","false"))
+    return str(v).lower() in {"1","true","yes","on"}
 
-class AuthError(Exception):
-    """Raised for any authentication or authorization failure."""
+def _secret():
+    s=os.getenv("AUTH_SECRET","")
+    if not s:
+        s="local-development-secret-change-me"
+    return s.encode()
 
-
-def auth_required() -> bool:
-    return os.getenv("AUTH_REQUIRED", "false").strip().lower() in ("1", "true", "yes")
-
-
-def _secret() -> bytes:
-    value = os.getenv("AUTH_SECRET", "").strip()
-    if not value:
-        if auth_required():
-            raise AuthError("AUTH_SECRET is not configured; refusing to sign tokens.")
-        # Ephemeral secret for local development only. Tokens die with the process.
-        value = _dev_secret()
-    return value.encode()
-
-
-_DEV_SECRET: Optional[str] = None
-
-
-def _dev_secret() -> str:
-    global _DEV_SECRET
-    if _DEV_SECRET is None:
-        _DEV_SECRET = secrets.token_urlsafe(32)
-    return _DEV_SECRET
-
-
-# ---------------------------------------------------------------- passwords
-def hash_password(password: str, salt: Optional[bytes] = None) -> str:
-    if not password or len(password) < 8:
+def hash_password(password:str):
+    if not isinstance(password,str) or len(password)<8:
         raise AuthError("Password must be at least 8 characters.")
-    salt = salt or secrets.token_bytes(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ROUNDS)
-    return f"pbkdf2${PBKDF2_ROUNDS}${base64.b64encode(salt).decode()}${base64.b64encode(digest).decode()}"
+    salt=secrets.token_bytes(16)
+    digest=hashlib.pbkdf2_hmac("sha256",password.encode(),salt,310000)
+    return "pbkdf2$310000$%s$%s"%(salt.hex(),digest.hex())
 
-
-def verify_password(password: str, stored: str) -> bool:
+def verify_password(password:str,stored:str):
     try:
-        scheme, rounds, salt_b64, digest_b64 = stored.split("$")
-        if scheme != "pbkdf2":
-            return False
-        expected = base64.b64decode(digest_b64)
-        actual = hashlib.pbkdf2_hmac("sha256", password.encode(), base64.b64decode(salt_b64), int(rounds))
-        return hmac.compare_digest(expected, actual)
+        scheme,iters,salt_hex,digest_hex=stored.split("$",3)
+        if scheme!="pbkdf2": return False
+        digest=hashlib.pbkdf2_hmac("sha256",password.encode(),bytes.fromhex(salt_hex),int(iters))
+        return hmac.compare_digest(digest.hex(),digest_hex)
     except Exception:
         return False
 
+def _b64(x): return base64.urlsafe_b64encode(x).rstrip(b"=").decode()
+def _unb64(x): return base64.urlsafe_b64decode(x+"="*(-len(x)%4))
 
-# ------------------------------------------------------------------- tokens
-def _b64e(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+def issue_token(sub,role="viewer",name="",expires_seconds=None):
+    if role not in ROLES: raise AuthError("Invalid role.")
+    ttl=TOKEN_TTL_SECONDS if expires_seconds is None else expires_seconds
+    payload=_b64(json.dumps({"sub":sub,"role":role,"name":name,
+                             "exp":int(time.time())+int(ttl)},
+                            separators=(",",":")).encode())
+    sig=_b64(hmac.new(_secret(),payload.encode(),hashlib.sha256).digest())
+    return f"{payload}.{sig}"
 
-
-def _b64d(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-
-
-def issue_token(email: str, role: str, name: str = "") -> str:
-    payload = {"sub": email, "role": role, "name": name,
-               "iat": int(time.time()), "exp": int(time.time()) + TOKEN_TTL_SECONDS}
-    body = _b64e(json.dumps(payload, separators=(",", ":")).encode())
-    sig = _b64e(hmac.new(_secret(), body.encode(), hashlib.sha256).digest())
-    return f"{body}.{sig}"
-
-
-def verify_token(token: str) -> Dict[str, Any]:
+def verify_token(token):
     try:
-        body, sig = token.split(".")
-    except ValueError:
-        raise AuthError("Malformed token.")
-    expected = _b64e(hmac.new(_secret(), body.encode(), hashlib.sha256).digest())
-    if not hmac.compare_digest(expected, sig):
-        raise AuthError("Invalid token signature.")
-    payload = json.loads(_b64d(body))
-    if payload.get("exp", 0) < time.time():
-        raise AuthError("Token has expired.")
-    return payload
+        parts=token.split(".")
+        if len(parts)!=2: raise AuthError("Invalid token.")
+        payload,sig=parts
+        expected=_b64(hmac.new(_secret(),payload.encode(),hashlib.sha256).digest())
+        if not hmac.compare_digest(sig,expected): raise AuthError("Invalid token signature.")
+        data=json.loads(_unb64(payload))
+        if int(data.get("exp",0))<int(time.time()): raise AuthError("Token expired.")
+        if data.get("role") not in ROLES: raise AuthError("Invalid token role.")
+        return data
+    except AuthError: raise
+    except Exception as e: raise AuthError("Invalid token.") from e
 
+def require_role(user,minimum):
+    actual=ROLES.get((user or {}).get("role","viewer"),0)
+    required=ROLES.get(minimum,0)
+    if actual<required:
+        raise AuthError(f"Role '{(user or {}).get('role','viewer')}' cannot perform '{minimum}' operations.")
+    return True
 
-# -------------------------------------------------------------------- store
 class UserStore:
-    def __init__(self, path: Path = DB_PATH):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.path = path
-        self._init()
-
-    def _conn(self):
-        c = sqlite3.connect(self.path)
-        c.row_factory = sqlite3.Row
-        return c
-
-    def _init(self):
-        with self._conn() as c:
+    def __init__(self,path=None):
+        self.path=Path(path or os.getenv("AUTH_DB_PATH","data/auth.db"))
+        self.path.parent.mkdir(parents=True,exist_ok=True)
+        with sqlite3.connect(self.path) as c:
             c.execute("""CREATE TABLE IF NOT EXISTS users(
-                email TEXT PRIMARY KEY, name TEXT, role TEXT NOT NULL DEFAULT 'viewer',
-                password_hash TEXT NOT NULL, created_at TEXT, last_login TEXT)""")
+                id TEXT PRIMARY KEY,email TEXT UNIQUE,display_name TEXT,role TEXT,
+                password_hash TEXT,created_at REAL,active INTEGER DEFAULT 1)""")
 
-    def count(self) -> int:
-        with self._conn() as c:
-            return c.execute("SELECT count(*) FROM users").fetchone()[0]
-
-    def get(self, email: str) -> Optional[sqlite3.Row]:
-        with self._conn() as c:
-            return c.execute("SELECT * FROM users WHERE email = ?", (email.lower().strip(),)).fetchone()
-
-    def create(self, email: str, password: str, name: str = "", role: str = "viewer") -> Dict[str, Any]:
-        email = (email or "").lower().strip()
-        if "@" not in email:
-            raise AuthError("A valid email address is required.")
-        if role not in ROLES:
-            raise AuthError(f"Role must be one of: {', '.join(ROLES)}")
-        if self.get(email):
-            raise AuthError("A user with that email already exists.")
-        with self._conn() as c:
-            c.execute(
-                "INSERT INTO users(email, name, role, password_hash, created_at) VALUES(?,?,?,?,datetime('now'))",
-                (email, name or email.split("@")[0], role, hash_password(password)),
-            )
-        return {"email": email, "name": name, "role": role}
-
-    def authenticate(self, email: str, password: str) -> Dict[str, Any]:
-        row = self.get(email)
-        # Constant-ish work whether or not the user exists, to avoid leaking
-        # which emails are registered via response timing.
-        stored = row["password_hash"] if row else hash_password("invalid-placeholder-password")
-        if not verify_password(password, stored) or not row:
-            raise AuthError("Incorrect email or password.")
-        with self._conn() as c:
-            c.execute("UPDATE users SET last_login = datetime('now') WHERE email = ?", (row["email"],))
-        return {"email": row["email"], "name": row["name"], "role": row["role"]}
-
-    def list_users(self):
-        with self._conn() as c:
-            return [dict(r) for r in c.execute(
-                "SELECT email, name, role, created_at, last_login FROM users ORDER BY created_at")]
-
-    def set_role(self, email: str, role: str):
-        if role not in ROLES:
-            raise AuthError(f"Role must be one of: {', '.join(ROLES)}")
-        with self._conn() as c:
-            c.execute("UPDATE users SET role = ? WHERE email = ?", (role, email.lower().strip()))
-
-    def delete(self, email: str):
-        with self._conn() as c:
-            c.execute("DELETE FROM users WHERE email = ?", (email.lower().strip(),))
-
-    def bootstrap_admin(self) -> Optional[str]:
-        """Seed the first admin from env vars so a fresh deploy is usable."""
-        email = os.getenv("ADMIN_EMAIL", "").strip()
-        password = os.getenv("ADMIN_PASSWORD", "").strip()
-        if not email or not password or self.count() > 0:
-            return None
+    def create(self,email,password,display_name="",role="viewer"):
+        if role not in ROLES: raise AuthError("Invalid role.")
+        email=email.strip().lower()
+        if not email: raise AuthError("Email is required.")
+        pwd=hash_password(password)
         try:
-            self.create(email, password, name="Platform Admin", role="admin")
-            return email
-        except AuthError:
-            return None
+            with sqlite3.connect(self.path) as c:
+                c.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?)",
+                          (str(uuid.uuid4()),email,display_name or email,role,pwd,time.time(),1))
+        except sqlite3.IntegrityError as e:
+            raise AuthError("User already exists.") from e
+        return {"email":email,"name":display_name or email,"role":role}
 
+    def bootstrap_admin(self):
+        email=os.getenv("ADMIN_EMAIL","")
+        password=os.getenv("ADMIN_PASSWORD","")
+        if not email or not password: return None
+        with sqlite3.connect(self.path) as c:
+            exists=c.execute("SELECT 1 FROM users WHERE email=?",(email.lower(),)).fetchone()
+        if exists: return None
+        self.create(email,password,email,"admin")
+        return email
 
-def require_role(user: Dict[str, Any], minimum: str) -> None:
-    if ROLE_RANK.get(user.get("role", "viewer"), 0) < ROLE_RANK[minimum]:
-        raise AuthError(f"This action requires the '{minimum}' role or higher.")
+    def authenticate(self,email,password):
+        with sqlite3.connect(self.path) as c:
+            row=c.execute("SELECT id,email,display_name,role,password_hash,active FROM users WHERE email=?",
+                          (email.strip().lower(),)).fetchone()
+        if not row or not row[5] or not verify_password(password,row[4]):
+            raise AuthError("Invalid credentials.")
+        return {"sub":row[0],"email":row[1],"name":row[2],"role":row[3]}
+
+def enabled(): return auth_required()
+
+def current_user():
+    try:
+        import streamlit as st
+        if auth_required():
+            user=getattr(st,"user",None)
+            if not user or not getattr(user,"is_logged_in",False): return None
+            email=getattr(user,"email","") or getattr(user,"preferred_username","")
+            role=os.getenv("DEFAULT_AUTH_ROLE","viewer")
+            return {"id":email,"sub":email,"email":email,"role":role,"name":getattr(user,"name",email)}
+    except Exception: pass
+    return {"id":"local-user","sub":"local-user","email":"local-user",
+            "role":os.getenv("DEFAULT_AUTH_ROLE","admin"),"name":"Local User"}
+
+def require(min_role="viewer"):
+    u=current_user()
+    if not u: return False,None
+    return ROLES.get(u.get("role","viewer"),0)>=ROLES.get(min_role,10),u

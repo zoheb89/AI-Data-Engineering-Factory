@@ -35,9 +35,14 @@ def _secret(name,default=""):
 def _bool(v): return str(v).lower() in {"1","true","yes","on"}
 
 def load_settings():
-    try:
-        with open("config.yaml","r",encoding="utf-8") as f: cfg=yaml.safe_load(f) or {}
-    except: cfg={}
+    cfg={}
+    for candidate in ("config.yaml", os.path.join(os.path.dirname(__file__),"../../config.yaml")):
+        try:
+            with open(os.path.abspath(candidate),"r",encoding="utf-8") as f:
+                cfg=yaml.safe_load(f) or {}
+                break
+        except Exception:
+            continue
     llm=cfg.get("llm",{}); db=cfg.get("databricks",{}); app=cfg.get("app",{}); image=cfg.get("image",{})
     return Settings(
       _secret("LLM_ENDPOINT",llm.get("base_url","")),
