@@ -24,10 +24,10 @@ Browser → Vercel/Next.js → FastAPI/Render → C INVENT engine → Databricks
    - `DATABRICKS_HOST`
    - `DATABRICKS_TOKEN`
    - `DATABRICKS_WAREHOUSE_ID`
-   - `provider-neutral_LLM_BASE_URL`
-   - `provider-neutral_LLM_MODEL`
-   - `provider-neutral_LLM_API_KEY`
-   - optional provider-neutral workspace settings
+   - `CAPGEMINI_LLM_BASE_URL`
+   - `CAPGEMINI_LLM_MODEL`
+   - `CAPGEMINI_LLM_API_KEY`
+   - optional Capgemini workspace settings
    - `CINVENT_ALLOW_MUTATIONS=false` initially
 7. Verify `https://<render-host>/health` and `/docs`.
 

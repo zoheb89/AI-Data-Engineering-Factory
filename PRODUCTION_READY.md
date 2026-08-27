@@ -45,9 +45,9 @@ Render reads `render.yaml` at the repo root.
 | Variable | Value |
 |---|---|
 | `CORS_ORIGINS` | `https://<your-app>.vercel.app` (exact origin, no trailing slash) |
-| `provider-neutral_LLM_BASE_URL` | your gateway URL |
-| `provider-neutral_LLM_API_KEY` | your key |
-| `provider-neutral_LLM_MODEL` | e.g. `openai.gpt-5.1` |
+| `CAPGEMINI_LLM_BASE_URL` | your gateway URL |
+| `CAPGEMINI_LLM_API_KEY` | your key |
+| `CAPGEMINI_LLM_MODEL` | e.g. `openai.gpt-5.1` |
 | `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | optional, for platform verification |
 | `CINVENT_DB_PATH` | `/var/data/cinvent.db` (already set) |
 

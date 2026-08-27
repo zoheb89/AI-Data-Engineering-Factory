@@ -3,7 +3,7 @@ app:
   version: 0.1.29-true-unified-product-ui
   environment: poc
 llm:
-  base_url: https://api.generative.engine.provider-neutral.com/v2/llm/invoke
+  base_url: https://api.generative.engine.capgemini.com/v2/llm/invoke
   model_name: openai.gpt-5.1
   provider: azure
   model_interface: langchain
@@ -14,7 +14,7 @@ llm:
   max_tokens: 1200
   timeout_seconds: 75
 image:
-  base_url: https://assets.generative.engine.provider-neutral.com/v1/generate
+  base_url: https://assets.generative.engine.capgemini.com/v1/generate
   model_name: gemini-2.5-flash-image
   provider: vertexai
 databricks:

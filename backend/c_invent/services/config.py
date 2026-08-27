@@ -1,64 +1,88 @@
-
 from dataclasses import dataclass
-import os, yaml
+import os
+import yaml
+
 
 @dataclass
 class Settings:
-    llm_base_url:str
-    llm_model:str
-    llm_provider:str
-    llm_api_key:str
-    llm_protocol:str
-    llm_interface:str
-    llm_mode:str
-    llm_auth_header:str
-    llm_auth_scheme:str
-    temperature:float
-    max_tokens:int
-    llm_timeout_seconds:int
-    db_host:str
-    db_token:str
-    db_warehouse_id:str
-    allow_mutations:bool
-    image_base_url:str
-    image_model:str
-    image_provider:str
-    image_api_key:str
-    app_name:str
-    app_version:str
+    llm_base_url: str
+    llm_model: str
+    llm_provider: str
+    llm_api_key: str
+    capgemini_workspace_id: str
+    include_workspace_id: bool
+    llm_interface: str
+    llm_mode: str
+    llm_auth_header: str
+    llm_auth_scheme: str
+    temperature: float
+    max_tokens: int
+    llm_timeout_seconds: int
+    db_host: str
+    db_token: str
+    db_warehouse_id: str
+    allow_mutations: bool
+    image_base_url: str
+    image_model: str
+    image_provider: str
+    image_api_key: str
+    app_name: str
+    app_version: str
 
-def _secret(name,default=""):
+
+def _secret(name, default=""):
     try:
         import streamlit as st
-        return st.secrets.get(name,os.getenv(name,default))
-    except Exception: return os.getenv(name,default)
-def _bool(v): return str(v).lower() in {"1","true","yes","on"}
+        return st.secrets.get(name, default)
+    except Exception:
+        return os.getenv(name, default)
+
+
+def _bool(v):
+    return str(v).lower() in {"1", "true", "yes", "on"}
+
 
 def load_settings():
-    cfg={}
-    for candidate in ("config.yaml", os.path.join(os.path.dirname(__file__),"../../config.yaml")):
-        try:
-            with open(os.path.abspath(candidate),"r",encoding="utf-8") as f:
-                cfg=yaml.safe_load(f) or {}
-                break
-        except Exception:
-            continue
-    llm=cfg.get("llm",{}); db=cfg.get("databricks",{}); app=cfg.get("app",{}); image=cfg.get("image",{})
+    cfg = {}
+    try:
+        with open("config.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        pass
+
+    llm = cfg.get("llm", {})
+    db = cfg.get("databricks", {})
+    app = cfg.get("app", {})
+    image = cfg.get("image", {})
+
     return Settings(
-      _secret("LLM_ENDPOINT",llm.get("base_url","")),
-      _secret("LLM_MODEL",llm.get("model_name","")),
-      _secret("LLM_PROVIDER",llm.get("provider","")),
-      _secret("LLM_API_KEY",""),
-      _secret("LLM_PROTOCOL",llm.get("protocol","auto")),
-      llm.get("model_interface","generic"),llm.get("mode","chat"),
-      _secret("LLM_AUTH_HEADER",llm.get("auth_header","Authorization")),
-      _secret("LLM_AUTH_SCHEME",llm.get("auth_scheme","Bearer")),
-      float(_secret("LLM_TEMPERATURE",llm.get("temperature",0.0))),
-      int(_secret("LLM_MAX_TOKENS",llm.get("max_tokens",1200))),
-      int(_secret("LLM_TIMEOUT_SECONDS",llm.get("timeout_seconds",90))),
-      _secret("DATABRICKS_HOST",""),_secret("DATABRICKS_TOKEN",""),_secret("DATABRICKS_WAREHOUSE_ID",""),
-      _bool(_secret("ALLOW_MUTATIONS",db.get("allow_mutations",False))),
-      _secret("IMAGE_ENDPOINT",image.get("base_url","")),_secret("IMAGE_MODEL",image.get("model_name","")),
-      _secret("IMAGE_PROVIDER",image.get("provider","")),_secret("IMAGE_API_KEY",""),
-      app.get("name","EliteInteliA Intelligence Factory"),app.get("version","1.0.0")
+        llm_base_url=_secret("CAPGEMINI_LLM_BASE_URL", llm.get("base_url", "")),
+        llm_model=_secret("CAPGEMINI_LLM_MODEL", llm.get("model_name", "openai.gpt-5.1")),
+        llm_provider=_secret("CAPGEMINI_LLM_PROVIDER", llm.get("provider", "azure")),
+        llm_api_key=_secret("CAPGEMINI_LLM_API_KEY", ""),
+        capgemini_workspace_id=_secret("CAPGEMINI_WORKSPACE_ID", ""),
+        include_workspace_id=_bool(_secret("CAPGEMINI_INCLUDE_WORKSPACE_ID", "false")),
+        llm_interface=llm.get("model_interface", "langchain"),
+        llm_mode=llm.get("mode", "chain"),
+        llm_auth_header=_secret(
+            "CAPGEMINI_LLM_AUTH_HEADER", llm.get("auth_header", "x-api-key")
+        ),
+        llm_auth_scheme=_secret(
+            "CAPGEMINI_LLM_AUTH_SCHEME", llm.get("auth_scheme", "none")
+        ),
+        temperature=float(_secret("LLM_TEMPERATURE", llm.get("temperature", 0.1))),
+        max_tokens=int(_secret("LLM_MAX_TOKENS", llm.get("max_tokens", 1200))),
+        llm_timeout_seconds=int(_secret("LLM_TIMEOUT_SECONDS", "90")),
+        db_host=_secret("DATABRICKS_HOST", ""),
+        db_token=_secret("DATABRICKS_TOKEN", ""),
+        db_warehouse_id=_secret("DATABRICKS_WAREHOUSE_ID", ""),
+        allow_mutations=_bool(
+            _secret("CINVENT_ALLOW_MUTATIONS", db.get("allow_mutations", False))
+        ),
+        image_base_url=_secret("CAPGEMINI_IMAGE_BASE_URL", image.get("base_url", "")),
+        image_model=_secret("CAPGEMINI_IMAGE_MODEL", image.get("model_name", "")),
+        image_provider=_secret("CAPGEMINI_IMAGE_PROVIDER", image.get("provider", "")),
+        image_api_key=_secret("CAPGEMINI_IMAGE_API_KEY", ""),
+        app_name=app.get("name", "C INVENT"),
+        app_version=app.get("version", "0.1.0-poc"),
     )

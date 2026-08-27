@@ -25,12 +25,3 @@ reportlab>=4.2,<5
 SQLAlchemy>=2.0,<3
 alembic>=1.13,<2
 psycopg2-binary>=2.9,<3 ; sys_platform != "darwin" or platform_machine != "arm64"
-
-# Optional production persistence/object-storage adapters
-psycopg[binary]>=3.2,<4
-
-# Optional production persistence/object-storage adapters
-boto3>=1.35,<2
-
-# Optional production persistence/object-storage adapters
-sqlalchemy>=2.0,<3

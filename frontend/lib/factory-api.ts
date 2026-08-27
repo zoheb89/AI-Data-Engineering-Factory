@@ -156,3 +156,44 @@ export const runEstimate = (id: string, body: Record<string, number>) =>
 export const getSow = (id: string) => req<Sow>(`/projects/${encodeURIComponent(id)}/sow`);
 export const sowMarkdownUrl = (id: string) =>
   `${API_BASE}/api/v2/projects/${encodeURIComponent(id)}/sow?fmt=markdown`;
+
+/* ------------------------------------------------- evidence §8/§9 + PDFs §29 */
+export type EvidenceRow = {
+  id: string; name: string; document_type: string; confidence: string;
+  sensitivity: string; classification: string; size_bytes: number;
+  characters: number; chunks: number; status: string; sha256: string; created_at: string;
+};
+export type IngestResult = {
+  duplicate: boolean; evidence_id: string; name: string; document_type?: string;
+  confidence?: string; sensitivity?: string; sensitivity_signals?: string[];
+  characters?: number; chunks?: number; message: string;
+};
+export type ReportRow = {
+  kind: string; title: string; available: boolean; uses: string[]; present: string[];
+};
+
+export async function uploadEvidence(projectId: string, file: File): Promise<IngestResult> {
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  const headers = new Headers();
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  // Content-Type is deliberately unset so the browser adds the multipart boundary.
+  const r = await fetch(`${API_BASE}/api/v2/projects/${encodeURIComponent(projectId)}/evidence`,
+                        {method: 'POST', body: fd, headers, cache: 'no-store'});
+  const raw = await r.text();
+  let payload: any = raw;
+  if (raw) { try { payload = JSON.parse(raw); } catch { /* keep text */ } }
+  if (!r.ok) {
+    const d = payload?.detail ?? payload;
+    throw new Error(typeof d === 'string' ? d : d?.message || `Upload failed (${r.status})`);
+  }
+  return payload as IngestResult;
+}
+
+export const listEvidence = (id: string) =>
+  req<{items: EvidenceRow[]; count: number}>(`/projects/${encodeURIComponent(id)}/evidence`);
+export const listReports = (id: string) =>
+  req<{items: ReportRow[]}>(`/projects/${encodeURIComponent(id)}/reports`);
+export const reportUrl = (id: string, kind: string) =>
+  `${API_BASE}/api/v2/projects/${encodeURIComponent(id)}/reports/${encodeURIComponent(kind)}.pdf`;

@@ -1,12 +1,14 @@
-# EliteInteliA Intelligence Factory — Render production dependencies
-
-# API runtime
+streamlit>=1.38,<2
+fastapi>=0.110
+uvicorn[standard]>=0.29
+requests>=2.31
+pydantic>=2.6
+PyYAML>=6.0
+python-dotenv>=1.0
 fastapi>=0.115,<1
 uvicorn[standard]>=0.34,<1
 python-multipart>=0.0.20,<1
 pydantic>=2.10,<3
-
-# Existing application dependencies
 streamlit>=1.45,<2
 requests>=2.32,<3
 PyYAML>=6.0,<7
@@ -17,20 +19,7 @@ pypdf>=5,<7
 databricks-sdk>=0.60,<1
 python-dotenv>=1,<2
 pytest>=8,<9
-
-# PDF report generation used by /api/engagements/{pid}/report.pdf
 reportlab>=4.2,<5
-
-# Core foundation (spec §40): canonical model persistence, Postgres-ready
 SQLAlchemy>=2.0,<3
 alembic>=1.13,<2
 psycopg2-binary>=2.9,<3 ; sys_platform != "darwin" or platform_machine != "arm64"
-
-# Optional production persistence/object-storage adapters
-psycopg[binary]>=3.2,<4
-
-# Optional production persistence/object-storage adapters
-boto3>=1.35,<2
-
-# Optional production persistence/object-storage adapters
-sqlalchemy>=2.0,<3

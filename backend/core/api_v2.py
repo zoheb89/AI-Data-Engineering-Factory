@@ -584,3 +584,111 @@ def project_sow(project_id: str, fmt: str = "json",
                    indent=2, default=str),
         stage="commercial", generated_by="commercial_factory")
     return sow
+
+
+# ==========================================================================
+# Evidence ingestion (§8, §9) and report generation (§29)
+# ==========================================================================
+from fastapi import File, UploadFile  # noqa: E402
+from fastapi.responses import Response  # noqa: E402
+
+from core import evidence as EV  # noqa: E402
+from core.reports import REPORTS, available_reports, build_report  # noqa: E402
+
+
+@router.post("/projects/{project_id}/evidence", status_code=201)
+async def upload_evidence(project_id: str, file: UploadFile = File(...),
+                          repo: R.Repository = Depends(get_repo)):
+    """Ingest one document: extract, classify, hash, chunk (§8, §9)."""
+    if not repo.get_project(project_id):
+        raise HTTPException(404, "Project not found")
+    data = await file.read()
+    if not data:
+        raise HTTPException(422, detail={"code": "EMPTY_FILE",
+                                         "message": "The uploaded file is empty."})
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(413, detail={"code": "FILE_TOO_LARGE",
+                                         "message": "Maximum upload size is 25 MB."})
+    try:
+        return EV.ingest(repo, project_id, file.filename or "upload", data,
+                         file.content_type or "")
+    except Exception as exc:  # noqa: BLE001 - surfaced rather than swallowed
+        raise HTTPException(500, detail={"code": "INGEST_FAILED", "message": str(exc)[:300]})
+
+
+@router.get("/projects/{project_id}/evidence")
+def list_evidence(project_id: str, repo: R.Repository = Depends(get_repo)):
+    try:
+        items = repo.list_evidence(project_id)
+    except KeyError:
+        raise HTTPException(404, "Project not found")
+    out = []
+    for e in items:
+        try:
+            analysis = json.loads(e.analysis_json or "{}")
+        except json.JSONDecodeError:
+            analysis = {}
+        out.append({
+            "id": e.id, "name": e.name, "document_type": e.document_type,
+            "confidence": analysis.get("confidence", ""), "sensitivity": e.sensitivity,
+            "classification": e.classification, "size_bytes": e.size_bytes,
+            "characters": len(e.extracted_text or ""), "chunks": analysis.get("chunks", 0),
+            "status": e.status, "sha256": (e.sha256 or "")[:16],
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        })
+    return {"items": out, "count": len(out)}
+
+
+@router.get("/projects/{project_id}/reports")
+def list_reports(project_id: str, repo: R.Repository = Depends(get_repo)):
+    """Which PDF reports can be produced from what exists right now (§29)."""
+    if not repo.get_project(project_id):
+        raise HTTPException(404, "Project not found")
+    kinds = {a.kind for a in repo.list_artifacts(project_id)}
+    return {"items": available_reports(kinds)}
+
+
+@router.get("/projects/{project_id}/reports/{kind}.pdf")
+def download_report(project_id: str, kind: str, repo: R.Repository = Depends(get_repo)):
+    """Render a stage report as a PDF from the current canonical state."""
+    p = repo.get_project(project_id)
+    if not p:
+        raise HTTPException(404, "Project not found")
+    if kind not in REPORTS:
+        raise HTTPException(404, detail={"code": "UNKNOWN_REPORT",
+                                         "available": sorted(REPORTS)})
+
+    artifacts: Dict[str, Any] = {}
+    degraded: List[str] = []
+    for name in REPORTS[kind]["artifacts"]:
+        a = repo.latest_artifact(project_id, name)
+        if not a:
+            continue
+        try:
+            content = json.loads(a.content)
+        except (json.JSONDecodeError, TypeError):
+            content = a.content
+        artifacts[name] = content
+        if isinstance(content, dict) and content.get("generation_mode", "ai") != "ai":
+            degraded.append(name)
+
+    if not artifacts:
+        raise HTTPException(409, detail={
+            "code": "NOTHING_TO_REPORT",
+            "message": f"No content exists for '{kind}' yet. Run the stage first."})
+
+    statements = [{"ref": s.ref, "text": s.text, "provenance": s.provenance,
+                   "kind": s.kind}
+                  for s in repo.list_statements(project_id)
+                  if not kind or s.stage in (kind, "") or True][:120]
+
+    note = (f"Sections drawn from {', '.join(degraded)} were produced without AI "
+            f"enrichment and contain evidence-only content.") if degraded else ""
+
+    pdf = build_report(kind, {"name": p.name, "intent": p.intent, "domain": p.domain,
+                              "version": p.version}, artifacts, statements, note)
+    repo.audit("report.generated", "report", kind, project_id=project_id,
+               after={"bytes": len(pdf)})
+    filename = f"{p.name[:40].replace(' ', '_')}_{kind}.pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})

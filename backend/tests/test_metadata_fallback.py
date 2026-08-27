@@ -35,7 +35,7 @@ class Store:
 
 class FailingLLM:
     def invoke_json(self, *args, **kwargs):
-        raise RuntimeError("provider-neutral gateway timed out")
+        raise RuntimeError("Capgemini gateway timed out")
 
 
 def test_metadata_timeout_persists_safe_fallback():

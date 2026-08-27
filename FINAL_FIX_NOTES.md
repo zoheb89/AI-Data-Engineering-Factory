@@ -2,10 +2,10 @@
 
 ## Production fixes
 
-### 1. provider-neutral metadata timeout no longer blocks the delivery lifecycle
+### 1. Capgemini metadata timeout no longer blocks the delivery lifecycle
 - Metadata now consumes only persisted Discovery + approved Architecture evidence.
 - Customer documents are not resent during Metadata generation.
-- The request is compact and bounded for the provider-neutral gateway.
+- The request is compact and bounded for the Capgemini gateway.
 - If the gateway still times out, C INVENT persists an **evidence-safe deterministic metadata skeleton** as a successful Metadata run.
 - No tables, columns, relationships or business definitions are fabricated. Missing schema detail is explicitly recorded as an assumption/open question.
 - The provider error is retained for traceability and can be retried later.

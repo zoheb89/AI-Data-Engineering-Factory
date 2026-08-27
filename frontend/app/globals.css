@@ -387,3 +387,34 @@ tr.dq em{color:#ff9a9a;font-size:10px}
 .sowBody ul{margin:0;padding-left:16px}
 .sowBody li{margin-bottom:3px}
 .sowBody .more{color:var(--muted);font-style:italic}
+
+/* Evidence ingestion */
+.dropzone.compact{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  padding:22px;border:2px dashed var(--border);border-radius:12px;background:rgba(255,255,255,.02);
+  cursor:pointer;text-align:center;transition:border-color .15s,background .15s}
+.dropzone.compact:hover,.dropzone.compact.over{border-color:rgba(46,215,232,.55);background:rgba(46,215,232,.06)}
+.dropzone.compact strong{font-size:13px}
+.dropzone.compact span{font-size:10.5px;color:var(--muted)}
+.dropzone.compact input.hidden{display:none}
+.ingestResult{display:flex;gap:10px;align-items:flex-start;margin-top:10px;padding:10px 12px;
+  border-radius:10px;border:1px solid rgba(126,230,160,.28);background:rgba(126,230,160,.07)}
+.ingestResult.dupe{border-color:rgba(255,199,127,.3);background:rgba(255,199,127,.07)}
+.ingestResult>svg{flex-shrink:0;margin-top:2px;color:#7ee6a0}
+.ingestResult.dupe>svg{color:#ffc77f}
+.ingestResult strong{font-size:12.5px}
+.ingestResult p{margin:2px 0 0;font-size:11.5px;color:var(--muted)}
+.ingestTags{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;align-items:center;font-size:10px}
+.typeTag{padding:2px 8px;border-radius:5px;background:rgba(112,167,255,.16);color:#8fb6ff;font-weight:700;font-size:9.5px}
+.confTag{padding:2px 8px;border-radius:5px;background:rgba(255,255,255,.07);color:var(--muted);font-size:9.5px}
+.sensTag{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:5px;
+  background:rgba(255,138,138,.16);color:#ff9a9a;font-weight:700;font-size:9.5px}
+.ingestTags .muted{color:var(--muted)}
+
+/* Reports */
+.reportGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:9px}
+.reportCard{display:flex;align-items:center;gap:10px;padding:11px 13px;border-radius:11px;
+  border:1px solid var(--border);background:rgba(255,255,255,.02);color:var(--text);text-decoration:none}
+.reportCard:hover{border-color:rgba(46,215,232,.45);background:rgba(46,215,232,.06)}
+.reportCard>svg{color:#2ed7e8;flex-shrink:0}
+.reportCard strong{display:block;font-size:12.5px}
+.reportCard small{display:block;font-size:10px;color:var(--muted);margin-top:2px}

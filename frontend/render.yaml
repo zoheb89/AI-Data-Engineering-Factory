@@ -16,17 +16,17 @@ services:
         sync: false
       - key: DATABRICKS_WAREHOUSE_ID
         sync: false
-      - key: provider-neutral_LLM_BASE_URL
+      - key: CAPGEMINI_LLM_BASE_URL
         sync: false
-      - key: provider-neutral_LLM_MODEL
+      - key: CAPGEMINI_LLM_MODEL
         sync: false
-      - key: provider-neutral_LLM_API_KEY
+      - key: CAPGEMINI_LLM_API_KEY
         sync: false
-      - key: provider-neutral_LLM_PROVIDER
+      - key: CAPGEMINI_LLM_PROVIDER
         sync: false
-      - key: provider-neutral_WORKSPACE_ID
+      - key: CAPGEMINI_WORKSPACE_ID
         sync: false
-      - key: provider-neutral_INCLUDE_WORKSPACE_ID
+      - key: CAPGEMINI_INCLUDE_WORKSPACE_ID
         sync: false
       - key: CINVENT_ALLOW_MUTATIONS
         sync: false

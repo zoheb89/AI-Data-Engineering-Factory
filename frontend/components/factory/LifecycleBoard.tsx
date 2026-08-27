@@ -18,6 +18,8 @@ import {
   runFactoryStage, type Coverage, type LifecycleDef, type Statement,
 } from '../../lib/factory-api';
 import {JobTrace, NoProject, ProjectBar, ProvenanceBadge, StatusDot} from './shared';
+import {EvidencePanel} from './EvidencePanel';
+import {ReportsPanel} from './ReportsPanel';
 
 const HANDLER_ICON: Record<string, any> = {
   agent: Cpu, engine: Calculator, data: Database, none: AlertTriangle,
@@ -110,6 +112,9 @@ export function LifecycleBoard() {
 
           {jobId && <JobTrace jobId={jobId} onDone={async () => { await refresh(); await loadCanonical(); }} />}
 
+          <EvidencePanel projectId={projectId}
+                         onChange={async () => { await refresh(); await loadCanonical(); }} />
+
           {/* Stage board */}
           {byGroup.map(({group, stages}) => (
             <section className="panel" key={group}>
@@ -174,6 +179,8 @@ export function LifecycleBoard() {
               </div>
             </section>
           ))}
+
+          <ReportsPanel projectId={projectId} />
 
           {/* Canonical statements with provenance */}
           <section className="panel">

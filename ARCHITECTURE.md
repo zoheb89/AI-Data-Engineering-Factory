@@ -10,7 +10,7 @@ The Delivery Workspace is where users and controlled agents perform the lifecycl
 The Platform Workspace contains target-platform onboarding, implementation and consumption capabilities. The target is selected per engagement; C INVENT does not assume Databricks, Fabric, Snowflake or another platform. Concrete mutations are invoked only through the selected platform adapter and remain behind approval and the mutation gate.
 
 ## AI / Intelligence
-provider-neutral GPT-5.1 is called through the supplied Generative Engine `/v2/llm/invoke` endpoint. AI agents accelerate discovery, architecture, metadata and engineering, but an AI response is not itself treated as evidence or approval. The evidence-based Current-State Assessment does not require an LLM call.
+Capgemini GPT-5.1 is called through the supplied Generative Engine `/v2/llm/invoke` endpoint. AI agents accelerate discovery, architecture, metadata and engineering, but an AI response is not itself treated as evidence or approval. The evidence-based Current-State Assessment does not require an LLM call.
 
 ## Execution Plane
 The selected customer data platform is reached only through a controlled platform adapter or approved cloud/IaC execution path. The LLM never receives raw platform credentials. C INVENT converts approved structured plans into controlled platform operations.

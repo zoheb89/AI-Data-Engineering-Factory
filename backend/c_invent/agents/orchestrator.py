@@ -1,5 +1,5 @@
 import json, re, os
-from c_invent.llm.generic import GenericLLM
+from c_invent.llm.capgemini import CapgeminiLLM
 from c_invent.services.platforms import normalize_platform, derive_state, secret_status, secret_value
 from c_invent.services.architecture_view import platform_fit, architecture_model
 from c_invent.agents import prompts
@@ -9,7 +9,7 @@ class Orchestrator:
     def __init__(self, settings, store):
         self.settings=settings
         self.store=store
-        self.llm=GenericLLM(settings)
+        self.llm=CapgeminiLLM(settings)
 
     def _run(self, pid, agent, instructions, context="", evidence_limit=16000, use_documents=True, max_tokens=1200):
         p = self.store.get_project(pid)
@@ -280,7 +280,7 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
         if not getattr(self.store, "artifact_exists", lambda *_: False)(pid, "intake_pack"):
             return {"error": "Discovery requires a completed Intake Pack."}
         # Discovery is the first AI delivery stage. Keep the request intentionally
-        # small so the provider-neutral gateway can answer reliably before we fan out into
+        # small so the Capgemini gateway can answer reliably before we fan out into
         # Assessment/Blueprint/Engineering. Larger evidence is consumed by later
         # stages after Discovery has produced a structured intermediate result.
         docs = self.store.documents(pid)
@@ -404,7 +404,7 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
         Assessment is a delivery-control decision, not another generic AI generation step.
         The deterministic layer evaluates the discovered use case, data/source evidence,
         platform evidence and governance/delivery unknowns. An optional AI enrichment may
-        be added later, but a provider-neutral gateway timeout must never block the lifecycle.
+        be added later, but a Capgemini gateway timeout must never block the lifecycle.
         """
         discovery = self._success(pid, "discovery")
         environment = self._success(pid, "environment_assessment")
@@ -600,8 +600,8 @@ Return a top-level JSON object with 'summary', 'facts', 'assumptions', and task-
         """Generate a compact blueprint from the persisted Discovery result.
 
         Blueprint intentionally bypasses the generic _run() wrapper because that
-        wrapper adds the whole project object and can make provider-neutral requests much
-        larger than necessary. The verified provider-neutral endpoint is sensitive to
+        wrapper adds the whole project object and can make Capgemini requests much
+        larger than necessary. The verified Capgemini endpoint is sensitive to
         request size/latency, so Blueprint is a small second-stage call.
         """
         discovery = self.store.latest_run(pid, "discovery")
@@ -716,7 +716,7 @@ Use the following structured evidence only:
 
         Metadata consumes the persisted Discovery + approved Blueprint only. It deliberately
         avoids resending customer documents because those documents can make a synchronous
-        provider-neutral invocation exceed the gateway window. If the provider is unavailable, a
+        Capgemini invocation exceed the gateway window. If the provider is unavailable, a
         deterministic metadata skeleton is persisted as a successful, explicitly-labelled
         artifact. It contains only evidenced sources/entities and marks missing schema detail
         as an open item; it never fabricates tables or columns.
@@ -815,7 +815,7 @@ Use the following structured evidence only:
     def run_engineering(self, pid):
         """Generate production-safe Medallion engineering in resumable chunks.
 
-        The provider-neutral gateway is synchronous and has a server-side completion
+        The Capgemini gateway is synchronous and has a server-side completion
         window. A single large engineering prompt is therefore intentionally
         avoided. Each component is small, persisted independently, and can be
         resumed after a timeout without regenerating successful components.

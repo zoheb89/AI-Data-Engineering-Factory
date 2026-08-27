@@ -11,7 +11,7 @@
 1. Replace the Render backend source with this package and deploy the `backend/` service.
 2. Ensure Render has:
    - `CORS_ORIGINS=https://eliteintelia-intelligence-factory.vercel.app,https://eliteintelia.com,https://www.eliteintelia.com`
-   - existing Databricks/provider-neutral secrets as required by the application.
+   - existing Databricks/Capgemini secrets as required by the application.
 3. Verify Render:
    - `GET /health` -> 200
    - `GET /api/engagements` -> 200 with `{ "items": [...] }`
